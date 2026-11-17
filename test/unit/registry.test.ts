@@ -155,6 +155,15 @@ describe("the registry", () => {
     expect(operationOf(list, { project: "invented-proj", dataset: "d", kind: "routines" })).toBe("bigquery.routines.list")
   })
 
+  it("names table's operation from its input: metadata, a sample (a data read), or its partitions (a query)", () => {
+    const table = ACTIONS.find((entry) => entry.name === "table")!
+    expect(table.operation).toBe("input")
+    expect(operationOf(table, { dataset: "d", table: "t" })).toBe("bigquery.tables.get")
+    expect(operationOf(table, { dataset: "d", table: "t", sample: 0 })).toBe("bigquery.tables.get")
+    expect(operationOf(table, { dataset: "d", table: "t", sample: 5 })).toBe("bigquery.tabledata.list")
+    expect(operationOf(table, { dataset: "d", table: "t", sample: 5, partitions: true })).toBe("bigquery.jobs.query")
+  })
+
   it("resolves a script's resource for each read method: <account>:<operation>, with only plan naming a change", () => {
     const { list } = specs()
     for (const spec of list.filter((item) => item.resource)) {

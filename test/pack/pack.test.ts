@@ -15,10 +15,12 @@ import { arch, platform } from "node:os"
 import { basename, join, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { NAMESPACE, PLUGIN_ID, SUPPORTED_HOST, TESTED_HOSTS } from "../../src/constants.js"
+import { TOOLS } from "../../src/domain/actions.js"
+import type { ToolName } from "../../src/domain/contract.js"
 import { defaultRules, type Rule } from "../../src/permissions.js"
 import { SKILL_IDS } from "../../src/skills.js"
 import { TOOLS_RPC_ID } from "../../src/host/script-methods.js"
-import { RPC_METHOD_NAMES } from "../../src/registry.js"
+import { HANDLERS, RPC_METHOD_NAMES } from "../../src/registry.js"
 
 const root = fileURLToPath(new URL("../..", import.meta.url))
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
@@ -199,7 +201,7 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       expect(output).toMatchObject({
         version: pkg.version,
         access: "all",
-        tools: { registered: 19, notBuilt: 19 },
+        tools: { registered: 19, notBuilt: TOOLS.filter((entry) => HANDLERS[entry.name as ToolName] === undefined).length },
         unguardedAgents: ["reviewer"],
         host: { version, range: SUPPORTED_HOST, tested: true },
       })

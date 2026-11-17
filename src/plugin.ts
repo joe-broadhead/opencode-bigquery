@@ -3,6 +3,7 @@
 // APIs. Every transform is synchronous and never throws: a failure is kept and shown by status.
 import { Plugin } from "@opencode/plugin"
 import { registerToolsRpc } from "@we-the-rebel-alliance/source-contract/tools-rpc"
+import { registerAuth } from "./auth/index.js"
 import { PLUGIN_ID } from "./constants.js"
 import { checkHost } from "./host-version.js"
 import { PLUGIN, scriptMethods } from "./host/script-methods.js"
@@ -61,6 +62,8 @@ export function createBigQueryPlugin(seam: BigQuerySeam) {
         const stopTools = await registerToolsRpc(ctx as never, { plugin: PLUGIN, methods: scriptMethods(specs, assert) })
         keep({ dispose: stopTools })
         keep(await registerSkills(ctx))
+        // The same options object seam.specs passed to createPorts: the auth state is keyed on it.
+        keep(await registerAuth(ctx, { options, fetch: globalThis.fetch }))
       } catch (error) {
         await cleanup().catch(() => undefined)
         throw error

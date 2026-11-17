@@ -90,6 +90,7 @@ export interface ResultPage {
   readonly schema?: readonly SchemaField[]
   readonly rows: readonly unknown[]
   readonly totalRows?: number
+  /** The token for the next page; absent on the last. Google's getQueryResults (and tabledata.list) `pageToken`. */
   readonly pageToken?: string
 }
 
@@ -137,7 +138,10 @@ export interface AccessToken {
   /** The bearer token. Never logged, never in a result. */
   readonly token: string
   readonly expiresAt: number
-  /** The scope list of Google's answer to the refresh that minted this token. */
+  /**
+   * The scope list of Google's answer to the refresh that minted this token; empty when unknown (a `token` account has
+   * no refresh): callers must not read empty as a missing scope.
+   */
   readonly scopes: readonly string[]
 }
 

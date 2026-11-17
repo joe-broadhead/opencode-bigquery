@@ -36,7 +36,8 @@ export interface ActionEntry {
   readonly class: ActionClass
   /**
    * The operation its first assert names, as the resource `<account>:<operation>`; `local` asserts `*` (no account,
-   * no Google call); `input` resolves from the input (`bigquery_list`: projects, datasets, tables or routines).
+   * no Google call); `input` resolves from the input (`bigquery_list`: projects, datasets, tables or routines;
+   * `bigquery_table`: the table, a sample or its partitions).
    */
   readonly operation: string | "local" | "input"
   /** For a tools RPC method with a resolver: what the resolver may name. `any` only for `plan`, which dry-runs a change. */
@@ -56,7 +57,7 @@ const entry = (name: string, fields: Omit<ActionEntry, "name" | "action">): Acti
 export const ACTIONS: readonly ActionEntry[] = [
   entry("status", { kind: "tool", readOnly: true, class: "read", operation: "local", owner: "F" }),
   entry("list", { kind: "tool", readOnly: true, class: "read", operation: "input", owner: "C" }),
-  entry("table", { kind: "tool", readOnly: true, class: "read", operation: "bigquery.tables.get", owner: "C" }),
+  entry("table", { kind: "tool", readOnly: true, class: "read", operation: "input", owner: "C" }),
   entry("search", { kind: "tool", readOnly: true, class: "read", operation: "bigquery.jobs.query", owner: "C" }),
   entry("estimate", { kind: "tool", readOnly: true, class: "read", operation: "bigquery.jobs.queryEstimate", owner: "C" }),
   entry("query", {
