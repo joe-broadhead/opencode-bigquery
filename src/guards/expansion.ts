@@ -1,32 +1,37 @@
 /**
- * Expansion (design §5.1 step 4): the referenced views and routines, recursively to depth 3, so the guards see what a
- * query really reads and what a view's or routine's body really does. The statement type and the referenced lists are
- * BigQuery's own parse of the text that runs; expansion is what follows those lists into the objects they name.
+ * Expansion (design §5.1 step 4): the views and routines BigQuery's dry run names, recursively to depth 3, so the guards
+ * see what a query really reads and what a view's or routine's body really does.
  *
- * A view is read with `tables.get`, and its body is dry-run with the view's own dataset as the default, which gives its
- * base tables in BigQuery's answer rather than by guessing at the text — that is what makes the fence correct whether
- * or not a view's bases appear in the outer query's `referencedTables` (L7). A body that cannot be read, does not lex,
- * cannot be dry-run (an authorised view over tables the caller cannot see), or is legacy SQL is **unresolved**, and the
- * read goes to a plan: nothing is assumed.
+ * **BigQuery's answer is the only source of what a statement touches.** The top-level dry run's `referencedTables`,
+ * `referencedLogicalViews` and `referencedRoutines` are Google's parse of the exact text that runs, so no alias, join,
+ * comma or quoting form can hide a table from them (review bigquery-3 R-1, R-2: every local parse missed one). Google's
+ * Job resource documents each list only as "Referenced tables for the job" (and the like), and does not say whether a
+ * view's base tables or a routine body's tables are in the outer list; so every view and SQL routine reached is
+ * analysed by a dry run of its own body, and what that dry run names is followed in turn:
  *
- * A routine is read with `routines.get`. A remote function, a Python UDF, a JavaScript UDF or any other non-SQL routine
- * bills or acts outside BigQuery, so it is an external effect. A SQL routine's body is **followed**: every table path
- * after `FROM`/`JOIN` is enqueued and every dotted call is enqueued as a routine, so a TVF that reads a fenced or
- * row-secured table is seen, and a SQL UDF that calls a remote function is an effect (review H-3). A body that cannot
- * be read, does not lex, or names something that does not resolve is unresolved.
+ * - a view: `tables.get` → `view.query`, dry-run with the view's dataset as the default;
+ * - a SQL function: `routines.get` → `definitionBody`, dry-run as `routineProbeSql` builds it (its arguments as typed
+ *   `NULL`s), with the routine's dataset as the default;
+ * - a remote function, a Python, JavaScript or any other non-SQL routine bills or acts outside BigQuery: an external
+ *   effect, and nothing to follow;
+ * - a property graph: this version does not follow a graph to its node and edge tables, so it is unresolved.
  *
- * The top-level text is followed the same way, for the reasons the referenced lists cannot be trusted to carry
- * everything (until L13 says they do). The whole resolution is cached 60 s per account (review R2-L1): a view redefined
- * inside the window is caught after the run by comparing the finished job's referenced lists with what expansion saw
- * (`CLASSIFICATION_DRIFT`).
+ * Each body is also lexed, for what no referenced list names: built-in calls that act or bill outside BigQuery
+ * (`ML.*`, `AI.*`, `EXTERNAL_QUERY`, `OBJ.GET_ACCESS_URL`). A body that cannot be read, does not lex, cannot be dry-run
+ * (an authorised view or routine over tables the caller cannot see), answers with a statement type other than
+ * `SELECT`, or is legacy SQL is **unresolved**, and the read goes to a plan: nothing is assumed.
+ *
+ * The whole resolution is cached 60 s per account (review R2-L1): a view redefined inside the window is caught after the
+ * run by comparing the finished job's referenced lists with what expansion saw (`CLASSIFICATION_DRIFT`).
  */
 import { BigQueryError } from "../domain/errors.js"
 import type { DatasetReference, DryRunStatistics, RoutineInfo, TableInfo, TableReference } from "../domain/google.js"
-import type { Findings, Lexer, Token } from "../domain/lexer-api.js"
+import type { Findings, Lexer } from "../domain/lexer-api.js"
 import type { Ports } from "../ports.js"
 import { rethrowCallFailure } from "./callerrors.js"
 import type { TtlCache } from "./cache.js"
-import { createLexer, relationNames } from "./lexer.js"
+import { createLexer } from "./lexer.js"
+import { routineProbeSql } from "./routinebody.js"
 import { tableFacts, type TableFacts } from "./tables.js"
 
 /** How deep a view or routine chain may go (design §5.1 step 4). */
@@ -45,11 +50,8 @@ export interface ExpansionDeps {
 }
 
 export interface ExpansionInput {
+  /** The top-level dry run's statistics: its referenced lists are where expansion starts. */
   readonly statistics: DryRunStatistics
-  /** The top-level text's tokens: the table paths and dotted calls expansion follows itself. */
-  readonly tokens?: readonly Token[]
-  /** The default dataset a two-part name in the top-level text resolves against, when the call has one. */
-  readonly defaultDataset?: DatasetReference
 }
 
 export interface ExpansionResult {
@@ -71,11 +73,18 @@ export interface ExpansionResult {
 const keyOf = (ref: TableReference) => `${ref.projectId}.${ref.datasetId}.${ref.tableId}`
 const routineKey = (ref: { readonly projectId: string; readonly datasetId: string; readonly routineId: string }) => `${ref.projectId}.${ref.datasetId}.${ref.routineId}`
 
-/** A dataset a body's two-part names resolve against. */
-interface Defaults {
-  readonly project: string
-  readonly dataset: string
+/**
+ * A metadata view, not storage: it has no `tables.get` answer and its rows are names, not data. Google does not document
+ * how a dry run names one, so any part spelled `INFORMATION_SCHEMA` (or a `region-` qualifier) counts; an allow fence
+ * checks these from the text (`informationSchemaRefs`).
+ */
+export function isInformationSchema(ref: TableReference): boolean {
+  if (/^region-/i.test(ref.projectId) || /^region-/i.test(ref.datasetId)) return true
+  return [ref.datasetId, ...ref.tableId.split(".")].some((part) => part.toUpperCase() === "INFORMATION_SCHEMA")
 }
+
+/** The statistics a body's own dry run must carry for it to count as analysed. */
+type BodyAnswer = { readonly ok: true; readonly statistics: DryRunStatistics } | { readonly ok: false }
 
 export class Expander {
   private readonly lexer: Lexer
@@ -105,8 +114,7 @@ export class Expander {
     for (const ref of input.statistics.referencedTables ?? []) this.tableQueue.push({ ref, depth: 1 })
     for (const ref of input.statistics.referencedLogicalViews ?? []) this.tableQueue.push({ ref, depth: 1 })
     for (const ref of input.statistics.referencedRoutines ?? []) this.routineQueue.push({ ref, depth: 1 })
-    // The top-level text names things the lists might not carry: a table function's tables, a UDF's callees.
-    if (input.tokens) this.enqueueNames(input.tokens, 1, input.defaultDataset ? { project: input.defaultDataset.projectId, dataset: input.defaultDataset.datasetId } : undefined)
+    this.graphs(input.statistics)
 
     // One queue at a time, either kind: a routine's body queues tables, and a view's body queues routines.
     while (this.tableQueue.length > 0 || this.routineQueue.length > 0) {
@@ -130,26 +138,53 @@ export class Expander {
     }
   }
 
-  /** The table paths and dotted calls a text names, queued at `depth` (review H-3). */
-  private enqueueNames(tokens: readonly Token[], depth: number, defaults: Defaults | undefined): void {
-    const names = relationNames(tokens)
-    for (const parts of names.tables) {
-      if (parts.length === 3) this.tableQueue.push({ ref: { projectId: parts[0]!, datasetId: parts[1]!, tableId: parts[2]! }, depth })
-      else if (parts.length >= 4) this.tableQueue.push({ ref: { projectId: parts[0]!, datasetId: parts[1]!, tableId: parts.slice(2).join(".") }, depth })
-      else if (defaults) this.tableQueue.push({ ref: { projectId: defaults.project, datasetId: parts[0]!, tableId: parts[1]! }, depth })
-      else this.unresolved.add(parts.join("."))
+  /** What a body's own dry run names, queued one level deeper. */
+  private enqueueAnswer(statistics: DryRunStatistics, depth: number): void {
+    for (const table of statistics.referencedTables ?? []) this.tableQueue.push({ ref: table, depth })
+    for (const view of statistics.referencedLogicalViews ?? []) this.tableQueue.push({ ref: view, depth })
+    for (const routine of statistics.referencedRoutines ?? []) this.routineQueue.push({ ref: routine, depth })
+    this.graphs(statistics)
+  }
+
+  /** A property graph reads node and edge tables this version does not follow: unresolved, so the read needs a plan. */
+  private graphs(statistics: DryRunStatistics): void {
+    for (const graph of statistics.referencedPropertyGraphs ?? []) this.unresolved.add(`${graph.projectId}.${graph.datasetId}.${graph.propertyGraphId}`)
+  }
+
+  /**
+   * A body's own dry run, with its object's dataset as the default (so its two-part names resolve as BigQuery resolves
+   * them for that object). Only a `SELECT` with statistics counts as analysed; a refusal for this body alone is
+   * `{ ok: false }`, and a call-wide failure (signed out, quota, Google down) ends the call.
+   */
+  private async bodyDryRun(sql: string, dataset: DatasetReference, location: string | undefined): Promise<BodyAnswer> {
+    let statistics: DryRunStatistics | undefined
+    try {
+      const answer = await this.deps.ports.bigquery.dryRun(
+        {
+          account: this.deps.account,
+          project: this.deps.project,
+          sql,
+          defaultDataset: dataset,
+          ...(location !== undefined ? { location } : {}),
+          // A cached answer need not list what it read (INFORMATION_SCHEMA.JOBS: the referenced lists are "only
+          // populated for query jobs that are not cache hits"), so the cache is never consulted for an analysis.
+          useQueryCache: false,
+        },
+        this.deps.signal,
+      )
+      statistics = answer.statistics
+    } catch (error) {
+      rethrowCallFailure(error)
+      return { ok: false }
     }
-    for (const parts of names.calls) {
-      if (parts.length === 3) this.routineQueue.push({ ref: { projectId: parts[0]!, datasetId: parts[1]!, routineId: parts[2]! }, depth })
-      else if (defaults) this.routineQueue.push({ ref: { projectId: defaults.project, datasetId: parts[0]!, routineId: parts[1]! }, depth })
-      else this.unresolved.add(parts.join("."))
-    }
+    // A body's own dry run must name a statement type this version reads; no type is DRY_RUN_INCOMPLETE's case.
+    if (!statistics || statistics.statementType !== "SELECT") return { ok: false }
+    return { ok: true, statistics }
   }
 
   private async resolveTable(item: { ref: TableReference; depth: number }): Promise<void> {
     const { ref, depth } = item
-    // A metadata view is not storage: it has no tables.get answer, and its rows are names, not data.
-    if (ref.datasetId.toUpperCase() === "INFORMATION_SCHEMA") return
+    if (isInformationSchema(ref)) return
     const key = keyOf(ref)
     if (this.tables.has(key) || this.views.has(key)) return
     let info: TableInfo
@@ -186,33 +221,13 @@ export class Expander {
       return
     }
     this.findings.push(this.lexer.findings(lexed.tokens))
-    this.enqueueNames(lexed.tokens, depth + 1, { project: facts.project, dataset: facts.dataset })
-    let inner: DryRunStatistics | undefined
-    try {
-      const answer = await this.deps.ports.bigquery.dryRun(
-        {
-          account: this.deps.account,
-          project: this.deps.project,
-          sql: body,
-          defaultDataset: { projectId: facts.project, datasetId: facts.dataset },
-          ...(facts.location !== undefined ? { location: facts.location } : {}),
-        },
-        this.deps.signal,
-      )
-      inner = answer.statistics
-    } catch (error) {
-      rethrowCallFailure(error)
-      inner = undefined
-    }
-    // A body's own dry run must name a statement type this version knows; no type is DRY_RUN_INCOMPLETE's case.
-    if (!inner || (inner.statementType !== "SELECT" && inner.statementType !== "ASSERT")) {
+    const answer = await this.bodyDryRun(body, { projectId: facts.project, datasetId: facts.dataset }, facts.location)
+    if (!answer.ok) {
       this.unresolved.add(key)
       return
     }
     this.views.set(key, facts)
-    for (const table of inner.referencedTables ?? []) this.tableQueue.push({ ref: table, depth: depth + 1 })
-    for (const view of inner.referencedLogicalViews ?? []) this.tableQueue.push({ ref: view, depth: depth + 1 })
-    for (const routine of inner.referencedRoutines ?? []) this.routineQueue.push({ ref: routine, depth: depth + 1 })
+    this.enqueueAnswer(answer.statistics, depth + 1)
   }
 
   private async resolveRoutine(item: { ref: { projectId: string; datasetId: string; routineId: string }; depth: number }): Promise<void> {
@@ -265,9 +280,19 @@ export class Expander {
       this.unresolved.add(key)
       return
     }
+    // The lexer reads the body only for built-in calls with external effects; what it reads comes from BigQuery.
     this.findings.push(this.lexer.findings(lexed.tokens))
-    // A SQL routine's body is followed: its tables reach the fence and the cap, and its callees reach the effect check.
-    this.enqueueNames(lexed.tokens, depth + 1, { project: ref.projectId, dataset: ref.datasetId })
+    const probe = routineProbeSql(routine, this.lexer)
+    if (probe === undefined) {
+      this.unresolved.add(key)
+      return
+    }
+    const answer = await this.bodyDryRun(probe, { projectId: ref.projectId, datasetId: ref.datasetId }, this.deps.location)
+    if (!answer.ok) {
+      this.unresolved.add(key)
+      return
+    }
+    this.enqueueAnswer(answer.statistics, depth + 1)
   }
 
   /** A view or routine by path, or the plugin's own error. */

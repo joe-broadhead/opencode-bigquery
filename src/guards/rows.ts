@@ -3,10 +3,10 @@
  * account's inline option (Q11) are decided in one place instead of once per tool.
  *
  * - `bigquery_query` and `bigquery_profile` reach it through `runRead`, with the verdict `prepareRead` made from the
- *   query text and every expanded body.
+ *   tables BigQuery's dry runs named (the query's own and every expanded view and routine body's).
  * - `bigquery_job` reaches it with the job's referenced objects: the verdict of a query this process prepared when the
- *   job is that query's, and otherwise a fail-closed one — any tagged column in a referenced table, or a script whose
- *   reads cannot be seen, means no inline rows.
+ *   job is that query's, and otherwise a fail-closed one — any tagged column in a referenced table, a view or routine,
+ *   a script, or a cache hit that names nothing means no inline rows.
  * - `bigquery_table`'s sample reaches it for the inline option; its tagged columns are withheld by construction.
  *
  * The dataset fence is a separate check, in `assertFenced`, and every path that can return a fenced object's rows calls

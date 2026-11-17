@@ -26,7 +26,7 @@ import { assertObjectResources, jobVerdict, prepareRead, readContext, runRead, s
 import { cellValue, rowValues, shapeRows } from "../guards/results.js"
 import { RowPolicyProber, type RowVerdict } from "../guards/rowpolicy.js"
 import { rowGate } from "../guards/rows.js"
-import type { PolicyVerdict } from "../guards/policy.js"
+import { policyVerdict, type PolicyVerdict } from "../guards/policy.js"
 import type { FenceObject } from "../guards/fence.js"
 import { sessionHash } from "../guards/session.js"
 import { locationOf, projectOf, settingsOf } from "../guards/settings.js"
@@ -635,28 +635,40 @@ const job: Handlers["job"] = async (input, context) => {
 
 /**
  * The row gate for a job (review H-1): the fence and the per-table assert over every object `jobs.get` names, then the
- * policy-tag rule — from the verdict of a query this process prepared, or fail-closed (save-only) for any other job,
- * because its full SQL is not available.
+ * policy-tag rule — the verdict of a query this process prepared, or fail-closed (save-only) for any other job, because
+ * its full SQL and its views' and routines' bodies have not been analysed.
+ *
+ * Google's `INFORMATION_SCHEMA.JOBS` reference says the referenced lists are "only populated for query jobs that are
+ * not cache hits", so an unprepared cache hit that names nothing proves nothing (review bigquery-3 round 2, LOW 2): it is
+ * save-only, and with a fence set it is refused, because the fence cannot be checked.
  */
 async function jobGate(status: JobStatus, context: HandlerContext) {
   const settings = settingsOf(context.options, context.account)
   const objects = jobObjects(status)
+  const prepared = jobVerdict(context.ports.clock, context.account, status.ref.jobId)
+  const blind = prepared === undefined && status.cacheHit === true && objects.length === 0
+  if (blind && (settings.fence?.allow !== undefined || settings.fence?.deny !== undefined)) {
+    throw new BigQueryError(
+      "DATASET_FENCED",
+      "The job's result came from the query cache, so BigQuery names none of the objects it read and the account's dataset fence cannot be checked",
+      "Run the query with bigquery_query, which checks it before it runs.",
+    )
+  }
   assertFenced(settings.fence, objects)
   await assertObjectResources({ call: context.call, account: context.account, action: actionOf("job").action, via: "bigquery_job", objects })
 
-  const prepared = jobVerdict(context.ports.clock, context.account, status.ref.jobId)
-  const { facts, unknown } = prepared ? { facts: prepared.tables, unknown: false } : await jobTables(context, status)
+  const { facts, unknown } = prepared ? { facts: [...prepared.tables, ...prepared.views], unknown: false } : await jobTables(context, status)
   const policy: PolicyVerdict = prepared
     ? prepared.policy
     : status.statementType === "SCRIPT" || status.statementType === "CALL"
       ? { inline: false, why: "the job is a script or procedure whose reads this process cannot see" }
-      : (status.referencedLogicalViews?.length ?? 0) > 0 || (status.referencedRoutines?.length ?? 0) > 0
-        ? { inline: false, why: "the job reads a view or a routine whose columns this process cannot check" }
-        : unknown
-          ? { inline: false, why: "the metadata of a table the job references could not be read" }
-          : facts.some((table) => table.tagged.length > 0)
-            ? { inline: false, why: "the job references a table with policy-tagged columns, and this process did not prepare it" }
-            : { inline: true }
+      : blind
+        ? { inline: false, why: "the job's result came from the query cache, so BigQuery names none of the tables it read" }
+        : (status.referencedLogicalViews?.length ?? 0) > 0 || (status.referencedRoutines?.length ?? 0) > 0
+          ? { inline: false, why: "the job reads a view or a routine whose body this process has not analysed" }
+          : unknown
+            ? { inline: false, why: "the metadata of a table the job references could not be read" }
+            : policyVerdict({ tables: facts, mode: context.options.policyTagged })
   return { ...rowGate({ options: context.options, account: context.account, settings, tables: facts, policy }), facts }
 }
 
@@ -857,14 +869,19 @@ const profile: Handlers["profile"] = async (input, context) => {
     },
     "read",
   )
-  if (!allowTagged && !prepared.policy.inline) {
+  // Over a table, the plugin wrote the SQL itself from the table's schema, so it knows exactly which columns it reads,
+  // and `chooseColumns` left every tagged one out. When BigQuery's dry run names that table and nothing else, that is
+  // the proof the server-set rule cannot make on its own (src/guards/policy.ts), and the aggregates come inline.
+  const exact = facts !== undefined && prepared.views.length === 0 && prepared.routines.length === 0 && prepared.tables.every((table) => table.name === facts!.name)
+  const ready: PreparedRead = exact ? { ...prepared, policy: { inline: true } } : prepared
+  if (!allowTagged && !ready.policy.inline) {
     throw new BigQueryError(
       "COLUMN_DENIED",
-      prepared.policy.why ?? "A profiled column is policy-tagged",
-      "Leave that column out; only the plugin's policyTagged option, which the user sets, can allow a tagged column.",
+      ready.policy.why ?? "A profiled column is policy-tagged",
+      "Profile the table instead of a SELECT, which leaves its tagged columns out; only the plugin's policyTagged option, which the user sets, can allow a tagged column.",
     )
   }
-  const run = await runRead(rc, prepared, { maxRows: chosen.length, waitSeconds: 30 })
+  const run = await runRead(rc, ready, { maxRows: chosen.length, waitSeconds: 30 })
   if (run.state === "running") throw new BigQueryError("JOB_TIMEOUT", "The profile query is still running", "Run the aggregate yourself with bigquery_query, or try again.")
   if (run.state === "failed") throw new BigQueryError(run.failure!.code, run.failure!.detail, run.failure!.next)
 

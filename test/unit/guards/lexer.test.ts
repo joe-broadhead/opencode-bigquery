@@ -3,7 +3,7 @@
 // case, `OBJ.GET_ACCESS_URL`; unterminated tokens; M4's destructive wording; and the property that the lexer never
 // lowers a decision.
 import { describe, expect, it } from "vitest"
-import { createLexer, lexText, relationNames, significantTokens } from "../../../src/guards/lexer.js"
+import { createLexer, definesFunction, informationSchemaRefs, lexText, significantTokens } from "../../../src/guards/lexer.js"
 import { kindOf, raise, STATEMENT_KINDS, type StatementType } from "../../../src/domain/statements.js"
 
 const lexer = createLexer()
@@ -195,11 +195,10 @@ describe("the lexer's destructive wording (review M4)", () => {
   })
 })
 
-describe("the lexer's policy-tag facts (design §5.3)", () => {
+describe("the names a text uses, for the hints", () => {
   it("names a column behind a table alias, backquoted and in any case", () => {
     expect(found("SELECT t.`SSN` FROM `p.d.t` AS t").columnNames.has("SSN")).toBe(true)
     expect(found("SELECT t.Ssn FROM t").columnNames.has("SSN")).toBe(true)
-    expect(found("SELECT `Ssn` FROM `p.d.t`").columnNames.has("SSN")).toBe(true)
     expect(found("SELECT a FROM `p.d.t`").columnNames.has("SSN")).toBe(false)
   })
 
@@ -211,68 +210,43 @@ describe("the lexer's policy-tag facts (design §5.3)", () => {
     expect(found("SELECT a*b, c FROM t").usesStar).toBe(false)
   })
 
-  it("sees a whole row used as a value through an implicit alias, quoted or not (review H-2)", () => {
-    // The reproductions: a table name used as a value was not recognised, only an explicit alias was.
-    expect(found("SELECT customers FROM ds.customers").aliasAsValue).toBe(true)
-    expect(found("SELECT customers FROM `invented-proj.ds.customers`").aliasAsValue).toBe(true)
-    expect(found("SELECT `c` FROM ds.customers AS c").aliasAsValue).toBe(true)
-    expect(found("SELECT `c` FROM `invented-proj.ds.customers` AS `c`").aliasAsValue).toBe(true)
-    expect(found("SELECT customers FROM `invented-proj`.`ds`.`customers`").aliasAsValue).toBe(true)
-    // A field access through either name is not the whole row.
-    expect(found("SELECT customers.id FROM ds.customers").aliasAsValue).toBe(false)
-    expect(found("SELECT `c`.id FROM ds.customers AS c").aliasAsValue).toBe(false)
-    expect(found("SELECT t.a FROM `p.d.t` AS t").aliasAsValue).toBe(false)
-    // A keyword-shaped table name is still a name.
-    expect(found("SELECT data FROM ds.data").aliasAsValue).toBe(true)
-  })
-
-  it("sees an alias used as a value: SELECT t, TO_JSON(t), ARRAY_AGG(t), (SELECT AS STRUCT t.*)", () => {
-    expect(found("SELECT t FROM `p.d.t` AS t").aliasAsValue).toBe(true)
-    expect(found("SELECT TO_JSON(t) FROM `p.d.t` t").aliasAsValue).toBe(true)
-    expect(found("SELECT ARRAY_AGG(t) FROM `p.d.t` AS t").aliasAsValue).toBe(true)
-    expect(found("SELECT (SELECT AS STRUCT t.*) FROM `p.d.t` AS t").aliasAsValue).toBe(true)
-    // A field access is not the whole row.
-    expect(found("SELECT t.a FROM `p.d.t` AS t").aliasAsValue).toBe(false)
-    expect(found("SELECT * FROM `p.d.t` AS t WHERE t.a = 1").aliasAsValue).toBe(false)
+  it("no longer resolves aliases: the policy-tag rule is decided from BigQuery's referenced tables (review bigquery-3 R-1)", () => {
+    // The field stays in Day 0's Findings until contract request 8 removes it; nothing reads it.
+    for (const sql of ["SELECT customers FROM ds.orders, ds.customers", "SELECT t FROM `p.d.t` AS t"]) expect(found(sql).aliasAsValue).toBe(false)
   })
 })
 
-describe("the relation names expansion follows (review H-3, LOW 1)", () => {
-  const names = (sql: string) => {
+describe("what the lexer still finds for the read path", () => {
+  const tokens = (sql: string) => {
     const result = lexer.lex(sql)
     if (!result.ok) throw new Error(sql)
-    return relationNames(result.tokens)
+    return result.tokens
   }
 
-  it("names the table paths a FROM or JOIN gives, 2 to 4 parts, and not one-part names or calls", () => {
-    expect(names("SELECT * FROM ds.customers AS c JOIN `invented-proj`.other.orders o ON TRUE").tables).toEqual([
-      ["ds", "customers"],
-      ["invented-proj", "other", "orders"],
-    ])
-    expect(names("WITH x AS (SELECT 1) SELECT * FROM x").tables).toEqual([])
-    expect(names("SELECT * FROM UNNEST([1, 2]) AS n").tables).toEqual([])
+  it("records INFORMATION_SCHEMA's level from the dotted name, for an allow fence (review round 1, LOW 1)", () => {
+    expect(informationSchemaRefs(tokens("SELECT * FROM `region-us`.INFORMATION_SCHEMA.TABLES"))).toEqual([{ level: "region", parts: ["region-us", "INFORMATION_SCHEMA", "TABLES"] }])
+    expect(informationSchemaRefs(tokens("SELECT * FROM `invented-proj`.INFORMATION_SCHEMA.TABLES"))).toEqual([{ level: "project", parts: ["invented-proj", "INFORMATION_SCHEMA", "TABLES"] }])
+    expect(informationSchemaRefs(tokens("SELECT * FROM `invented-proj`.sales.INFORMATION_SCHEMA.COLUMNS"))).toEqual([{ level: "dataset", parts: ["invented-proj", "sales", "INFORMATION_SCHEMA", "COLUMNS"] }])
+    expect(informationSchemaRefs(tokens("SELECT * FROM `invented-proj.sales.INFORMATION_SCHEMA.COLUMNS`"))).toEqual([{ level: "dataset", parts: ["invented-proj", "sales", "INFORMATION_SCHEMA", "COLUMNS"] }])
+    // After a comma, in a join, behind a comment: a dotted chain is found wherever it is.
+    expect(informationSchemaRefs(tokens("SELECT 1 FROM ds.a, /* x */ `region-eu`.INFORMATION_SCHEMA.JOBS"))).toHaveLength(1)
+    expect(informationSchemaRefs(tokens("SELECT * FROM INFORMATION_SCHEMA.TABLES"))).toEqual([{ level: "project", parts: ["INFORMATION_SCHEMA", "TABLES"] }])
   })
 
-  it("names the dotted calls, and never the effect or SAFE namespaces", () => {
-    expect(names("SELECT ds.wrapper(id), `p`.`ds`.tvf(id) FROM t").calls).toEqual([
-      ["ds", "wrapper"],
-      ["p", "ds", "tvf"],
-    ])
-    expect(names("SELECT SAFE.SUBSTR(x, 1, 2), ML.GENERATE_TEXT(MODEL m), OBJ.GET_ACCESS_URL(r, 'r')").calls).toEqual([])
-    expect(names("SELECT COUNT(*), SUBSTR(x, 1) FROM t").calls).toEqual([])
-  })
-
-  it("distinguishes a table function from a table, and records INFORMATION_SCHEMA's level", () => {
-    expect(names("SELECT * FROM ds.tvf(1)").calls).toEqual([["ds", "tvf"]])
-    expect(names("SELECT * FROM ds.tvf(1)").tables).toEqual([])
-    expect(names("SELECT * FROM `region-us`.INFORMATION_SCHEMA.TABLES").informationSchema).toEqual([{ level: "region", parts: ["region-us", "INFORMATION_SCHEMA", "TABLES"] }])
-    expect(names("SELECT * FROM `invented-proj`.INFORMATION_SCHEMA.TABLES").informationSchema).toEqual([{ level: "project", parts: ["invented-proj", "INFORMATION_SCHEMA", "TABLES"] }])
-    expect(names("SELECT * FROM `invented-proj`.sales.INFORMATION_SCHEMA.COLUMNS").informationSchema).toEqual([{ level: "dataset", parts: ["invented-proj", "sales", "INFORMATION_SCHEMA", "COLUMNS"] }])
-  })
-
-  it("finds names behind comments and backquotes", () => {
-    expect(names("SELECT * FROM /* x */ ds . `tvf` (1)").calls).toEqual([["ds", "tvf"]])
-    expect(names("SELECT * FROM\n`p`.`d`.`t`").tables).toEqual([["p", "d", "t"]])
+  it("sees a function definition in any of its forms, and not the words elsewhere", () => {
+    for (const sql of [
+      "CREATE TEMP FUNCTION f(x INT64) AS (x + 1); SELECT f(1)",
+      "create temporary function f() as ((select 1)); select f()",
+      "CREATE OR REPLACE TEMP FUNCTION f() AS (1); SELECT f()",
+      "CREATE TEMP TABLE FUNCTION f() AS (SELECT 1); SELECT * FROM f()",
+      "CREATE TEMP AGGREGATE FUNCTION f(x INT64) AS (SUM(x)); SELECT f(1)",
+      "CREATE /* c */ TEMP FUNCTION f() AS (1); SELECT f()",
+    ]) {
+      expect(definesFunction(tokens(sql)), sql).toBe(true)
+    }
+    for (const sql of ["SELECT 'CREATE TEMP FUNCTION' AS x", "SELECT `function` FROM t -- CREATE FUNCTION", "SELECT create_function FROM t", "CREATE TABLE t AS SELECT 1"]) {
+      expect(definesFunction(tokens(sql)), sql).toBe(false)
+    }
   })
 })
 

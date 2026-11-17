@@ -62,7 +62,7 @@ describe("M6: Google's text and the data stay out of message and next", () => {
     }
   })
 
-  it("a hostile flexible column name is shown as column #n, and a hostile table name as object", async () => {
+  it("a hostile flexible column name never reaches a warning, and a hostile table name is shown as object", async () => {
     const hostile = `${"漢".repeat(299)}z`
     const h = harness()
     scriptNativeRead(h.bigquery, {
@@ -71,7 +71,7 @@ describe("M6: Google's text and the data stay out of message and next", () => {
     const { output } = await runTool(h, "query", { sql: `SELECT \`${hostile}\` FROM \`invented-proj.sales.orders\`` })
     expect(output.warnings).toEqual([expect.objectContaining({ code: "POLICY_TAGGED_SOURCE" })])
     const warning = (output.warnings as { message: string }[])[0]!.message
-    expect(warning).toContain("column #1")
+    expect(warning).toContain("`invented-proj`.`sales`.`orders`")
     expect(warning).not.toContain("漢")
 
     const ugly = harness()

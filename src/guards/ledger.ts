@@ -129,6 +129,9 @@ export function createLedger(deps: LedgerDeps): LedgerPort {
       // A torn final line (no newline) is a write that never finished; every other line is a finished job.
       const complete = text.endsWith("\n") ? text : text.slice(0, text.lastIndexOf("\n") + 1)
       let sum = 0
+      // A backstop for the lock's timeout (review bigquery-3 round 2, LOW 5): two processes that both waited out the lock
+      // could each append one job; it is counted once.
+      const counted = new Set<string>()
       for (const line of complete.split("\n")) {
         if (line.trim() === "") continue
         let entry: Partial<SpendEntry>
@@ -142,6 +145,10 @@ export function createLedger(deps: LedgerDeps): LedgerPort {
         if (query.session !== undefined && entry.session !== query.session) continue
         const at = typeof entry.at === "string" ? Date.parse(entry.at) : Number.NaN
         if (!Number.isFinite(at) || at < query.since) continue
+        if (typeof entry.jobId === "string" && entry.jobId !== "") {
+          if (counted.has(entry.jobId)) continue
+          counted.add(entry.jobId)
+        }
         sum += entry.bytesBilled
       }
       return sum

@@ -7,7 +7,7 @@ import type { DryRunStatistics, RoutineInfo, TableInfo } from "../../../src/doma
 import { TtlCache } from "../../../src/guards/cache.js"
 import { Expander } from "../../../src/guards/expansion.js"
 import { fakePorts } from "../../fake/ports.js"
-import { ACCOUNT, DATASET, LOCATION, PROJECT, callsOf, harness, nativeTable, one, routine, runTool, scriptNativeRead, statistics, tableRef } from "../reads/support.js"
+import { ACCOUNT, DATASET, LOCATION, PROJECT, callsOf, harness, jobStatus, nativeTable, one, resultPage, routine, runTool, scriptNativeRead, statistics, tableRef } from "../reads/support.js"
 import { needsPlan } from "../reads/expect.js"
 
 const path = (name: string) => `${PROJECT}.${DATASET}.${name}`
@@ -15,6 +15,39 @@ const refOf = (name: string) => tableRef(name)
 
 function view(name: string, query: string | undefined, overrides: Partial<TableInfo> = {}): TableInfo {
   return nativeTable({ tableReference: refOf(name), type: "VIEW", numBytes: "0", numRows: "0", ...(query !== undefined ? { view: { query } } : { view: {} }), ...overrides })
+}
+
+const routineRef = (routineId: string) => ({ projectId: PROJECT, datasetId: DATASET, routineId })
+
+/** A routine and what its body's own dry run names. */
+interface Body {
+  readonly routine: Partial<RoutineInfo>
+  readonly answer?: Partial<DryRunStatistics> | "denied"
+}
+
+/**
+ * A world where the outer dry run answers `top`, and a routine body's dry run (the one with a default dataset) answers
+ * what that routine's entry says: the body is recognised by its own text, so the fake never reads SQL for tables.
+ */
+function routineWorld(h: ReturnType<typeof harness>, world: { top: DryRunStatistics; routines: Record<string, Body>; tables?: Record<string, TableInfo> }): void {
+  h.bigquery.on("dryRun", async (request: { sql: string; defaultDataset?: unknown }) => {
+    if (request.defaultDataset === undefined) return { location: LOCATION, statistics: world.top }
+    const entry = Object.values(world.routines).find((body) => {
+      const text = body.routine.definitionBody
+      return text !== undefined && (request.sql.includes(text) || request.sql.includes(text.replace(/\bx\b/g, "(CAST(NULL AS INT64))")))
+    })
+    if (entry?.answer === "denied") throw new BigQueryError("PERMISSION_DENIED", "a table the caller cannot read")
+    return { location: LOCATION, statistics: { statementType: "SELECT", totalBytesProcessed: "0", ...(entry?.answer ?? {}) } }
+  })
+  h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) => {
+    const entry = world.routines[ref.routineId]
+    if (!entry) throw new BigQueryError("NOT_FOUND", "no such routine")
+    return routine({ routineReference: ref, language: "SQL", ...entry.routine })
+  })
+  h.bigquery.on("getTable", async (_account: string, ref: { projectId: string; datasetId: string; tableId: string }) => world.tables?.[`${ref.projectId}.${ref.datasetId}.${ref.tableId}`] ?? nativeTable({ tableReference: ref }))
+  h.bigquery.on("listRowAccessPolicies", async () => ({ items: [] }))
+  h.bigquery.on("run", async () => jobStatus())
+  h.bigquery.on("results", async () => resultPage())
 }
 
 interface World {
@@ -185,13 +218,12 @@ describe("expansion (§5.1 step 4)", () => {
     }
   })
 
-  it("follows a table function's body into the fence: a TVF over a fenced table is refused (review H-3)", async () => {
+  it("follows a table function's body into the fence through the body's own dry run: a TVF over a fenced table is refused (review H-3)", async () => {
     const h = harness(undefined, { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { allow: [`${PROJECT}.sales`] } } } })
-    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "tvf" }] }) }))
-    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) =>
-      routine({ routineReference: ref, routineType: "TABLE_VALUED_FUNCTION", language: "SQL", definitionBody: "SELECT * FROM `invented-proj.private.secret`" }),
-    )
-    h.bigquery.on("getTable", async (_account: string, ref: { projectId: string; datasetId: string; tableId: string }) => nativeTable({ tableReference: ref }))
+    routineWorld(h, {
+      top: statistics({ referencedTables: [], referencedRoutines: [routineRef("tvf")] }),
+      routines: { tvf: { routine: { routineType: "TABLE_VALUED_FUNCTION", definitionBody: "SELECT * FROM secret_alias_free_text" }, answer: { referencedTables: [tableRef("secret", "private")] } } },
+    })
     const { output } = await runTool(h, "query", { sql: "SELECT * FROM `invented-proj.sales.tvf`()" })
     expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
     expect(String(output.message)).toContain("`private`")
@@ -200,11 +232,10 @@ describe("expansion (§5.1 step 4)", () => {
 
   it("follows a table function's body into the cap: a TVF over a row-secured table cannot be bounded (review H-3)", async () => {
     const h = harness()
-    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "tvf" }] }) }))
-    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) =>
-      routine({ routineReference: ref, routineType: "TABLE_VALUED_FUNCTION", language: "SQL", definitionBody: "SELECT * FROM `invented-proj.sales.orders`" }),
-    )
-    h.bigquery.on("getTable", async (_account: string, ref: { projectId: string; datasetId: string; tableId: string }) => nativeTable({ tableReference: ref }))
+    routineWorld(h, {
+      top: statistics({ referencedTables: [], referencedRoutines: [routineRef("tvf")] }),
+      routines: { tvf: { routine: { routineType: "TABLE_VALUED_FUNCTION", definitionBody: "SELECT * FROM `invented-proj.sales.orders`" }, answer: { referencedTables: [refOf("orders")] } } },
+    })
     h.bigquery.on("listRowAccessPolicies", async () => ({ items: [{ policyId: "invented" }] }))
     const { output } = await runTool(h, "query", { sql: "SELECT * FROM `invented-proj.sales.tvf`()" })
     expect(needsPlan(output)).toBe("CAP_NOT_ENFORCEABLE")
@@ -212,20 +243,37 @@ describe("expansion (§5.1 step 4)", () => {
     expect(callsOf(h.bigquery, "run")).toEqual([])
   })
 
-  it("follows a SQL UDF's body to the remote function it calls (review H-3)", async () => {
+  it("follows a SQL UDF's body to the remote function its own dry run names (review H-3)", async () => {
     const h = harness()
-    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [refOf("orders")], referencedRoutines: [] }) }))
-    h.bigquery.on("getTable", async (_account: string, ref: { projectId: string; datasetId: string; tableId: string }) => nativeTable({ tableReference: ref }))
-    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) =>
-      ref.routineId === "wrapper"
-        ? routine({ routineReference: ref, language: "SQL", definitionBody: "SELECT `invented-proj.sales.remote_fn`(x)" })
-        : routine({ routineReference: ref, remoteFunctionOptions: { endpoint: "https://invented.invalid/fn" } }),
-    )
-    // The dry run did not list the routine; the text's qualified call is what expansion follows.
+    routineWorld(h, {
+      top: statistics({ referencedTables: [refOf("orders")], referencedRoutines: [routineRef("wrapper")] }),
+      routines: {
+        wrapper: {
+          routine: { definitionBody: "`invented-proj.sales.remote_fn`(x)", arguments: [{ name: "x", dataType: { typeKind: "INT64" } }] },
+          answer: { referencedRoutines: [routineRef("remote_fn")] },
+        },
+        remote_fn: { routine: { remoteFunctionOptions: { endpoint: "https://invented.invalid/fn" } } },
+      },
+    })
     const { output } = await runTool(h, "query", { sql: "SELECT `invented-proj.sales.wrapper`(id) FROM `invented-proj.sales.orders`" })
     expect(needsPlan(output)).toBe("EXTERNAL_EFFECTS")
     expect(String(output.message)).toContain("a remote function")
+    // The body went to BigQuery with its argument as a typed NULL and the routine's dataset as the default.
+    const probe = callsOf(h.bigquery, "dryRun").map((args) => args[0] as { sql: string; defaultDataset?: unknown; useQueryCache?: boolean }).find((request) => request.defaultDataset !== undefined)!
+    expect(probe).toMatchObject({ sql: "SELECT (\n`invented-proj.sales.remote_fn`((CAST(NULL AS INT64)))\n)", defaultDataset: { projectId: PROJECT, datasetId: DATASET }, useQueryCache: false })
     expect(callsOf(h.bigquery, "run")).toEqual([])
+  })
+
+  it("stops a SQL routine chain at depth 3, each level named by its own body's dry run (review H-3)", async () => {
+    const h = harness()
+    const chain: Record<string, Body> = {}
+    for (let level = 1; level <= 4; level += 1) {
+      chain[`fn${level}`] = { routine: { definitionBody: `level_${level}(x)` }, answer: { referencedRoutines: level < 4 ? [routineRef(`fn${level + 1}`)] : [] } }
+    }
+    routineWorld(h, { top: statistics({ referencedTables: [], referencedRoutines: [routineRef("fn1")] }), routines: chain })
+    const { output } = await runTool(h, "query", { sql: "SELECT `invented-proj.sales.fn1`(id)" })
+    expect(needsPlan(output)).toBe("UNRESOLVED_REFERENCE")
+    expect(String(output.message)).toContain("`fn4`")
   })
 
   it("treats a JavaScript UDF, and a SQL routine with no body, as needing a plan (review H-3)", async () => {
@@ -238,18 +286,6 @@ describe("expansion (§5.1 step 4)", () => {
     noBody.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "fn" }] }) }))
     noBody.bigquery.on("getRoutine", async (_account: string, ref: never) => routine({ routineReference: ref, language: "SQL" }))
     expect(needsPlan((await runTool(noBody, "query", { sql: "SELECT `invented-proj.sales.fn`(id)" })).output)).toBe("UNRESOLVED_REFERENCE")
-  })
-
-  it("stops a SQL routine chain at depth 3 (review H-3)", async () => {
-    const h = harness()
-    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "fn1" }] }) }))
-    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) => {
-      const next = Number(ref.routineId.slice(2)) + 1
-      return routine({ routineReference: ref, language: "SQL", definitionBody: next <= 4 ? `SELECT \`invented-proj.sales.fn${next}\`(x)` : "SELECT x" })
-    })
-    const { output } = await runTool(h, "query", { sql: "SELECT `invented-proj.sales.fn1`(id)" })
-    expect(needsPlan(output)).toBe("UNRESOLVED_REFERENCE")
-    expect(String(output.message)).toContain("`fn4`")
   })
 
   it("treats a view body's dry run without a statement type as unresolved (review LOW 2)", async () => {

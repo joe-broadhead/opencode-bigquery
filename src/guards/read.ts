@@ -7,17 +7,28 @@
  * external effect, an object outside the fence and any cap condition this version cannot prove all answer
  * `NEEDS_PLAN`, and nothing reaches `jobs.insert` before the dry run has answered with the statistics the guards need.
  *
- * - Local refusals first: a lex failure (`SQL_INVALID`), legacy SQL (`LEGACY_SQL_REFUSED`), text over 1 MiB (the schema).
- * - Then the dry run (`jobs.insert`, `dryRun: true`): no `statistics.query` refuses `DRY_RUN_INCOMPLETE`, because a run
- *   without it would be unguarded.
- * - `statementType` is BigQuery's parse of the exact text that then runs. Only `SELECT` and `ASSERT` are reads; the
- *   lexer can only raise that decision (`raise`).
- * - Views and routines expand to depth 3 into the same guards (`Expansion`).
- * - The fence, the cap and the policy-tag rule see the union of the dry run's four referenced lists and everything
- *   expansion reached.
- * - The run reuses the exact text and parameters, carries a client `jobId`, `maximumBytesBilled`, labels and a time
- *   limit, and no destination, session or connection properties. A finished job is compared with its dry run
- *   (`CLASSIFICATION_DRIFT`).
+ * **What decides what.** BigQuery's dry run is the only source of the objects a statement touches: its
+ * `referencedTables`, `referencedLogicalViews`, `referencedRoutines` and `referencedPropertyGraphs`, and the same lists
+ * from a dry run of every view and SQL routine body they lead to (`Expander`). That server set decides the fence, the
+ * per-table assert, the policy-tag rule, the cap's storage and row-policy conditions and the account's `inline.deny`.
+ * The lexer decides only what no referenced list carries:
+ * - local refusals: a text that does not lex (`SQL_INVALID`), a `#legacySQL` hint (`LEGACY_SQL_REFUSED`);
+ * - raising the statement's kind (`CALL`, `EXECUTE IMMEDIATE`, transactions, destructive wording), never lowering it;
+ * - built-in calls that act or bill outside BigQuery (`ML.*`, `AI.*`, `EXTERNAL_QUERY`, `OBJ.GET_ACCESS_URL`), in the
+ *   text and in every expanded body;
+ * - a temporary function's definition, whose body no server list is documented to cover: refused;
+ * - a region- or project-level `INFORMATION_SCHEMA` view under an allow fence: refused;
+ * - the hints.
+ * Text over 1 MiB is refused by the schema. A dry run that fails, or answers without `statistics.query` or a statement
+ * type, refuses (`DRY_RUN_INCOMPLETE`): no read runs on the lexer's word alone.
+ *
+ * The dry run never consults the query cache: Google's `INFORMATION_SCHEMA.JOBS` reference says the referenced lists are
+ * "only populated for query jobs that are not cache hits", and an empty list must never pass for "reads nothing". The run
+ * itself may still use the cache.
+ *
+ * The run reuses the exact text and parameters, carries a client `jobId`, `maximumBytesBilled`, labels and a time limit,
+ * and no destination, session or connection properties. A finished job is compared with its dry run
+ * (`CLASSIFICATION_DRIFT`).
  */
 import { BigQueryError, type ErrorCode } from "../domain/errors.js"
 import { actionOf } from "../domain/actions.js"
@@ -37,7 +48,7 @@ import { rowGate } from "./rows.js"
 import { assertFenced, isFenced, type FenceObject } from "./fence.js"
 import { hintsFor } from "./hints.js"
 import { failureFor } from "./jobfail.js"
-import { createLexer, hasKeyword, relationNames } from "./lexer.js"
+import { createLexer, definesFunction, hasKeyword, informationSchemaRefs } from "./lexer.js"
 import { limiterFor } from "./limits.js"
 import { toQueryParameters } from "./params.js"
 import { policyVerdict, type PolicyVerdict } from "./policy.js"
@@ -127,6 +138,9 @@ export interface PreparedRead {
 
 export type PrepareMode = "read" | "inspect"
 
+/** The name a temporary function is recorded under among a plan's unresolved references. */
+export const TEMPORARY_FUNCTION = "a temporary function"
+
 const lexRefusal = (line: number, column: number, what: string) =>
   new BigQueryError("SQL_INVALID", `The lexer found ${what} at line ${line}, column ${column}`, "Fix the SQL at that position; bigquery_table shows the names.")
 
@@ -156,7 +170,8 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
         ...(params ? { params } : {}),
         ...(request.defaultDataset ? { defaultDataset: request.defaultDataset } : {}),
         ...(location !== undefined ? { location } : {}),
-        useQueryCache: useCache,
+        // Never a cached answer: a cache hit need not list what it read (see the header).
+        useQueryCache: false,
       },
       context.signal,
     )
@@ -202,23 +217,38 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
   })
   let expansion: ExpansionResult
   try {
-    expansion = await expander.expand({
-      statistics,
-      tokens: lexed.tokens,
-      ...(request.defaultDataset ? { defaultDataset: request.defaultDataset } : {}),
-    })
+    expansion = await expander.expand({ statistics })
   } catch (error) {
     throw asCallError(error, "The references could not be resolved")
   }
 
+  // The fence comes first among the refusals that follow expansion: an object outside it is refused outright, never
+  // offered a plan. §5.4's second fence: a person's own rule names every referenced object, so `deny bigquery.query on
+  // work:table:*.hr.*` is consulted too.
+  const objects = fenceObjects(statistics, expansion)
+  assertFenced(context.settings.fence, objects)
+  await assertObjectResourcesFor(context, objects)
+
   const findings: Findings[] = [top, ...expansion.findings]
   const effects = [...new Set([...top.externalEffects, ...expansion.findings.flatMap((report) => report.externalEffects), ...expansion.effects])]
+  // A temporary function is not a persisted routine: no `routines.get` reads it, and Google does not say the referenced
+  // lists cover its body. Its body is not parsed here; the read fails closed instead.
+  const temporary = definesFunction(lexed.tokens)
+  const unresolved = temporary ? [TEMPORARY_FUNCTION, ...expansion.unresolved] : expansion.unresolved
 
   if (mode === "read") {
+    if (temporary) {
+      throw new BigQueryError(
+        "NEEDS_PLAN",
+        "The query defines a temporary function, and what a temporary function's body reads cannot be checked before it runs",
+        "Write the expression inline, or call a persistent function (its body is checked); otherwise show the user the preview after bigquery_plan({ sql }), which needs a Read and write sign-in.",
+        { reason: "UNRESOLVED_REFERENCE" },
+      )
+    }
     if (expansion.unresolved.length > 0) {
       throw new BigQueryError(
         "NEEDS_PLAN",
-        `The query references ${safeName(expansion.unresolved[0]!)}, which could not be resolved (a view or routine deeper than 3, a body that could not be read, or one this version cannot analyse)`,
+        `The query references ${safeName(expansion.unresolved[0]!)}, which could not be resolved (a view or routine deeper than 3, a body BigQuery's dry run could not analyse, or a property graph)`,
         "Show the user the preview after bigquery_plan({ sql }); a Read account needs a Read and write sign-in for this one, or rewrite the query to avoid that object.",
         { reason: "UNRESOLVED_REFERENCE" },
       )
@@ -233,16 +263,11 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
     }
   }
 
-  assertFenced(context.settings.fence, fenceObjects(statistics, expansion))
-  // §5.4's second fence: a person's own rule names every referenced object, so `deny bigquery.query on
-  // work:table:*.hr.*` is consulted too.
-  await assertObjectResourcesFor(context, fenceObjects(statistics, expansion))
-
   const prober = new RowPolicyProber(
     { ports: context.ports, account: context.account, project, signal: context.signal },
     cacheOf<RowVerdict>(context.ports.clock, "rowpolicy", 10 * 60_000, now),
   )
-  const cap = await capVerdict({ statistics, bytes, tables: expansion.tables, effects, unresolved: expansion.unresolved, rowPolicy: (facts) => prober.probe(facts) })
+  const cap = await capVerdict({ statistics, bytes, tables: expansion.tables, effects, unresolved, rowPolicy: (facts) => prober.probe(facts) })
 
   if (mode === "read" && !cap.enforceable) {
     if (context.options.uncappedReads === "refuse") {
@@ -260,7 +285,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
     )
   }
 
-  const policy = policyVerdict({ tables: expansion.tables, findings, mode: context.options.policyTagged })
+  const policy = policyVerdict({ tables: [...expansion.tables, ...expansion.views], mode: context.options.policyTagged })
   const hints = hintsFor({ findings: top, tables: expansion.tables, bytes, hasLimit: hasKeyword(lexed.tokens, "LIMIT"), useCache })
 
   return {
@@ -285,7 +310,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
     useCache,
     ...(request.maxBytes !== undefined ? { maxBytes: request.maxBytes } : {}),
     ...(request.defaultDataset ? { defaultDataset: request.defaultDataset } : {}),
-    unresolved: expansion.unresolved,
+    unresolved,
   }
 }
 
@@ -454,7 +479,7 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
   if (prepared.accuracy === "LOWER_BOUND") {
     warnings.push({ code: "ESTIMATE_LOWER_BOUND", message: "The dry run's estimate is a lower bound, so what is billed may be more." })
   }
-  const gate = rowGate({ options: context.options, account: context.account, settings: context.settings, tables: prepared.tables, policy: prepared.policy })
+  const gate = rowGate({ options: context.options, account: context.account, settings: context.settings, tables: [...prepared.tables, ...prepared.views], policy: prepared.policy })
   warnings.push(...gate.warnings)
 
   return {
@@ -482,7 +507,8 @@ export function saveNext(job: { readonly project: string; readonly jobId: string
 /**
  * Why the run differs from its dry run, or undefined.
  *
- * TODO(L7): whether `referencedTables` lists a view's base tables is L7's question; expansion does not depend on it.
+ * TODO(L7, L13): whether a query's `referencedTables` already lists a view's base tables and a routine body's tables is
+ * the live check's question; expansion does not depend on it, because it dry-runs each body itself.
  */
 function driftOf(prepared: PreparedRead, status: JobStatus): string | undefined {
   if (status.statementType !== undefined && status.statementType !== prepared.statementType) {
@@ -557,7 +583,7 @@ async function assertObjectResourcesFor(context: ReadContext, objects: readonly 
  */
 function assertWideInformationSchema(fence: AccountSettings["fence"], tokens: readonly Token[]): void {
   if (fence?.allow === undefined) return
-  for (const ref of relationNames(tokens).informationSchema) {
+  for (const ref of informationSchemaRefs(tokens)) {
     if (ref.level === "dataset") {
       const [project, dataset] = ref.parts
       if (project !== undefined && dataset !== undefined && !isFenced(fence, { project, dataset, name: "INFORMATION_SCHEMA", kind: "view" })) continue

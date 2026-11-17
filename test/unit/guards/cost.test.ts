@@ -145,6 +145,13 @@ describe("the spend ledger (§6.2 item 4)", () => {
     expect(readFileSync(join(dir, "spend.jsonl"), "utf8").trim().split("\n")).toHaveLength(30)
   })
 
+  it("counts a job once even if two processes both waited out the lock and wrote it (review bigquery-3 round 2, LOW 5)", async () => {
+    const dir = folder()
+    const line = `${JSON.stringify(entry({ bytesBilled: 13, jobId: "oc_twice" }))}\n`
+    writeFileSync(join(dir, "spend.jsonl"), `${line}${line}${JSON.stringify(entry({ bytesBilled: 1, jobId: "oc_other" }))}\n`)
+    expect(await createLedger({ stateDir: dir }).spent({ account: "default", since: 0 })).toBe(14)
+  })
+
   it("ignores a torn final line, which is a write that never finished", async () => {
     const dir = folder()
     writeFileSync(join(dir, "spend.jsonl"), `${JSON.stringify(entry({ bytesBilled: 5 }))}\n{"at":"2026-11-17T12:00:00.000Z","account":"def`)
