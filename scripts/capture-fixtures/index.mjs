@@ -45,6 +45,11 @@ if (!project || (!token && !args["dry-run"])) {
 }
 
 const out = join(ROOT, args.out ?? "test/fixtures/google")
+
+const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+const dataset = (value) => value.split(".").slice(1, 2)[0]
+const table = (value) => value.split(".").slice(2).join(".")
+
 mkdirSync(out, { recursive: true })
 
 const t = args["tagged-table"] ?? `${project}.invented_dataset.invented_tagged_table`
@@ -167,7 +172,7 @@ function redact(record) {
   if (body !== null && typeof body === "object") {
     if (Array.isArray(body.rows)) {
       const fields = body.schema?.fields ?? []
-      body.rows = body.rows.map((row) => ({ f: (row.f ?? []).map((cell, index) => ({ v: inventedCell(fields[index], cell?.v })) }) ))
+      body.rows = body.rows.map((row) => ({ f: (row.f ?? []).map((cell, index) => ({ v: inventedCell(fields[index], cell?.v) })) }))
     }
     const fields = body.schema?.fields
     if (Array.isArray(fields)) redactFields(fields)
@@ -235,9 +240,6 @@ function realNames() {
   return [...names.entries()].sort((left, right) => right[0].length - left[0].length).map(([real, invented]) => [new RegExp(escape(real), "g"), invented])
 }
 
-const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-const dataset = (value) => value.split(".").slice(1, 2)[0]
-const table = (value) => value.split(".").slice(2).join(".")
 
 function parse(argv) {
   const out = {}

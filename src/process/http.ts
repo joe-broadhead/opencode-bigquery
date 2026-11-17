@@ -243,7 +243,9 @@ export function createHttp(deps: HttpDeps): Http {
         let json: unknown
         if (!request.priority) await gate.enter(request.signal)
         try {
-          response = await deps.fetch(url, {
+          // The race is the stop's guarantee: a call settles when its signal aborts, whatever the socket is doing.
+          // undici is told too (the same signal), and its eventual rejection is swallowed if the race won.
+          const sent = deps.fetch(url, {
             method: request.method,
             headers: {
               authorization: `Bearer ${token.token}`,
@@ -254,6 +256,8 @@ export function createHttp(deps: HttpDeps): Http {
             signal: deadline.signal,
             redirect: "error",
           })
+          sent.catch(() => undefined)
+          response = await Promise.race([sent, aborted(deadline.signal)])
           // A 401 is not Google's answer to the call: never parse it, and give it one fresh token.
           if (response.status === 401 && !tokenRetry) {
             tokenRetry = true
@@ -366,6 +370,17 @@ export async function delay(ms: number, signal: AbortSignal): Promise<void> {
       fail(cancelled())
     }
     signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+/** Rejects as soon as the signal aborts, so a stopped call never depends on the socket noticing (M-6). */
+function aborted(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_, fail) => {
+    if (signal.aborted) {
+      fail(new Error("aborted"))
+      return
+    }
+    signal.addEventListener("abort", () => fail(new Error("aborted")), { once: true })
   })
 }
 

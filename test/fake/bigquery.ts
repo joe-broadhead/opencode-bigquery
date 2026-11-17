@@ -29,6 +29,11 @@ export interface BigQueryFake extends FakeGoogleServer {
   readonly maxInFlight: number
   /** How many answers the fake gave, including built-in ones. */
   readonly answered: number
+  /**
+   * Resolves when a request matching `match` has been recorded (at once if one already was). No timer: a test that
+   * must stop a call in flight waits for the fact, never for a delay (review bigquery-2 M-6).
+   */
+  onRequest(match: (request: { readonly method: string; readonly path: string }) => boolean): Promise<void>
 }
 
 /** Starts the fake on an ephemeral loopback port. */
@@ -41,9 +46,15 @@ export async function startFake(): Promise<BigQueryFake> {
   let inFlight = 0
   let maxInFlight = 0
   let answered = 0
+  const sockets = new Set<import("node:net").Socket>()
+  const waiters: { readonly match: (request: { readonly method: string; readonly path: string }) => boolean; readonly resolve: () => void }[] = []
 
   const server = createServer((request, response) => {
     void handle(request, response)
+  })
+  server.on("connection", (socket) => {
+    sockets.add(socket)
+    socket.once("close", () => sockets.delete(socket))
   })
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done))
   const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
@@ -70,9 +81,25 @@ export async function startFake(): Promise<BigQueryFake> {
     refreshScopes(next) {
       scopes = [...next]
     },
+    onRequest(match) {
+      if (requests.some(match)) return Promise.resolve()
+      return new Promise<void>((resolve) => waiters.push({ match, resolve }))
+    },
     async close() {
+      // Release every waiter and destroy every socket, so an answer held open (a test's `pending()` body) can never
+      // keep close() waiting: the handler is still suspended, its socket is gone.
+      for (const waiter of waiters.splice(0)) waiter.resolve()
+      for (const socket of sockets) socket.destroy()
+      sockets.clear()
       server.closeAllConnections?.()
-      await new Promise<void>((done) => server.close(() => done()))
+      await new Promise<void>((done) => {
+        const timer = setTimeout(done, 1_000)
+        timer.unref?.()
+        server.close(() => {
+          clearTimeout(timer)
+          done()
+        })
+      })
     },
   }
   return fake
@@ -103,6 +130,11 @@ export async function startFake(): Promise<BigQueryFake> {
         at: Date.now(),
       }
       requests.push(recorded)
+      for (const waiter of [...waiters]) {
+        if (!waiter.match(recorded)) continue
+        waiters.splice(waiters.indexOf(waiter), 1)
+        waiter.resolve()
+      }
       const violation = contractViolation(recorded)
       const answer = violation === undefined ? next(recorded) : refused(recorded, violation)
       if (answer.delayMs !== undefined) await sleep(answer.delayMs)

@@ -10,7 +10,7 @@ import { convertRows } from "../../src/process/values.js"
 import type { SchemaField } from "../../src/domain/google.js"
 import { dryRunOf, pending, replay, startFake, type Fixture } from "../fake/bigquery.js"
 import { FakeAuth, readRecord } from "../fake/ports.js"
-import { cleanup, startHost, until } from "./harness.js"
+import { cleanup, startHost } from "./harness.js"
 
 afterAll(cleanup)
 
@@ -79,7 +79,7 @@ describe("the runtime in a host", () => {
       const controller = new AbortController()
 
       const call = bigquery.results("default", run.ref, { timeoutMs: 30_000, maxResults: 51 }, controller.signal)
-      await until("the results request reached the fake", async () => fake.requests.some((request) => request.method === "GET" && request.path === resultsPath))
+      await fake.onRequest((request) => request.method === "GET" && request.path === resultsPath)
       controller.abort()
       const error = (await call.catch((thrown: unknown) => thrown)) as BigQueryError
 
