@@ -60,6 +60,26 @@ export function createLedger(deps: LedgerDeps): LedgerPort {
     }
   }
 
+  const alreadyRecorded = (account: string, jobId: string): boolean => {
+    if (!existsSync(file)) return false
+    let text: string
+    try {
+      text = readFileSync(file, "utf8")
+    } catch {
+      return false
+    }
+    for (const line of text.split("\n")) {
+      if (!line.includes(jobId)) continue
+      try {
+        const entry = JSON.parse(line) as Partial<SpendEntry>
+        if (entry.account === account && entry.jobId === jobId) return true
+      } catch {
+        continue
+      }
+    }
+    return false
+  }
+
   const release = (held: boolean) => {
     if (!held) return
     try {
@@ -84,6 +104,8 @@ export function createLedger(deps: LedgerDeps): LedgerPort {
       })}\n`
       const held = acquire()
       try {
+        // One job one line: a job first seen running and recorded when it finished is written once, by jobId.
+        if (alreadyRecorded(entry.account, entry.jobId)) return
         const fd = openSync(file, "a", 0o600)
         try {
           writeSync(fd, line)

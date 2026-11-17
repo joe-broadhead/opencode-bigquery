@@ -69,7 +69,7 @@ describe("the fence over the dry run's four lists and expansion (§5.4)", () => 
       const h = fencedHarness()
       h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: stats }))
       h.bigquery.on("getTable", async () => nativeTable({ type: "VIEW", view: { query: "SELECT 1" } }))
-      h.bigquery.on("getRoutine", async () => ({ routineReference: { projectId: PROJECT, datasetId: "private", routineId: "fn" }, language: "SQL" }))
+      h.bigquery.on("getRoutine", async () => ({ routineReference: { projectId: PROJECT, datasetId: "private", routineId: "fn" }, language: "SQL", definitionBody: "SELECT 1" }))
       const { output } = await runTool(h, "query", { sql: "SELECT 1" })
       expect(output.error, JSON.stringify(stats)).toBe("DATASET_FENCED")
       expect(callsOf(h.bigquery, "run")).toEqual([])

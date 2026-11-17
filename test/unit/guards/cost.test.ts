@@ -98,8 +98,8 @@ describe("the spend ledger (§6.2 item 4)", () => {
   it("writes one line per job, 0600, and sums what it holds", async () => {
     const dir = folder()
     const ledger = createLedger({ stateDir: dir })
-    await ledger.record(entry({ bytesBilled: 100 }))
-    await ledger.record(entry({ bytesBilled: 250, session: "other" }))
+    await ledger.record(entry({ bytesBilled: 100, jobId: "oc_a" }))
+    await ledger.record(entry({ bytesBilled: 250, session: "other", jobId: "oc_b" }))
     expect(await ledger.spent({ account: "default", since: 0 })).toBe(350)
     expect(await ledger.spent({ account: "default", since: 0, session: "abcdefabcdefabcd" })).toBe(100)
     expect(await ledger.spent({ account: "someone", since: 0 })).toBe(0)
@@ -109,6 +109,15 @@ describe("the spend ledger (§6.2 item 4)", () => {
     expect(lines).toHaveLength(2)
     expect(JSON.parse(lines[0]!)).toMatchObject({ account: "default", bytesBilled: 100, via: "bigquery_query" })
     expect(statSync(file).mode & 0o077).toBe(0)
+  })
+
+  it("writes a job once, however many times it is recorded (review M-1)", async () => {
+    const dir = folder()
+    const ledger = createLedger({ stateDir: dir })
+    await ledger.record(entry({ bytesBilled: 9, jobId: "oc_once" }))
+    await ledger.record(entry({ bytesBilled: 9, jobId: "oc_once", via: "bigquery_job" }))
+    expect(await ledger.spent({ account: "default", since: 0 })).toBe(9)
+    expect(readFileSync(join(dir, "spend.jsonl"), "utf8").trim().split("\n")).toHaveLength(1)
   })
 
   it("takes concurrent appends from two ledgers without a torn or interleaved line", async () => {
@@ -147,11 +156,11 @@ describe("the spend ledger (§6.2 item 4)", () => {
     writeFileSync(join(dir, "spend.jsonl.lock"), "99999")
     const old = new Date(Date.now() - 60_000)
     utimesSync(join(dir, "spend.jsonl.lock"), old, old)
-    await createLedger({ stateDir: dir, sleep: () => undefined }).record(entry({ bytesBilled: 7 }))
+    await createLedger({ stateDir: dir, sleep: () => undefined }).record(entry({ bytesBilled: 7, jobId: "oc_seven" }))
     expect(await createLedger({ stateDir: dir }).spent({ account: "default", since: 0 })).toBe(7)
     // A lock that is still fresh: the append is one atomic write, so it lands and the lock is left as it was.
     writeFileSync(join(dir, "spend.jsonl.lock"), "1")
-    await createLedger({ stateDir: dir, sleep: () => undefined }).record(entry({ bytesBilled: 11 }))
+    await createLedger({ stateDir: dir, sleep: () => undefined }).record(entry({ bytesBilled: 11, jobId: "oc_eleven" }))
     expect(await createLedger({ stateDir: dir }).spent({ account: "default", since: 0 })).toBe(18)
   })
 })

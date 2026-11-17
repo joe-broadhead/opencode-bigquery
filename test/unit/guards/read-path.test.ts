@@ -133,9 +133,11 @@ describe("query parameters", () => {
   })
 
   it("refuses a value whose type it cannot know rather than guessing", () => {
-    for (const params of [{ s: { a: 1 } }, { n: null }, { xs: [] }, { nested: [[1]] }, { mixed: [1, "x"] }, { nan: Number.NaN }]) {
+    for (const params of [{ s: { a: 1 } }, { n: null }, { xs: [] }, { nested: [[1]] }, { mixed: [1, "x"] }, { nan: Number.NaN }, { big: 9007199254740993 }, { many: [9007199254740992] }]) {
       expect(() => toQueryParameters(params as never), JSON.stringify(params)).toThrow(/INPUT_INVALID/)
     }
+    // An integer above 2^53 loses precision as a JSON number: the hint names the CAST (review LOW 6).
+    expect(() => toQueryParameters({ big: 9007199254740993 })).toThrow(/CAST/)
   })
 })
 

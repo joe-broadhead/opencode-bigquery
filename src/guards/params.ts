@@ -27,7 +27,11 @@ function typeOf(value: unknown, depth = 0): { readonly type: string; readonly ar
   if (typeof value === "boolean") return { type: "BOOL" }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw invalid("a number that is not finite")
-    return Number.isInteger(value) && Math.abs(value) <= MAX_SAFE ? { type: "INT64" } : { type: "FLOAT64" }
+    if (Number.isInteger(value) && Math.abs(value) > MAX_SAFE) {
+      // A JSON number cannot hold an INT64 this large: the value was already rounded before the plugin saw it.
+      throw invalid("an integer above 2^53, which a JSON number cannot hold exactly (review LOW 6)")
+    }
+    return Number.isInteger(value) ? { type: "INT64" } : { type: "FLOAT64" }
   }
   if (Array.isArray(value)) {
     if (value.length === 0) throw invalid("an empty array has no element type")

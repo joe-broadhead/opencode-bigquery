@@ -3,7 +3,7 @@
 // case, `OBJ.GET_ACCESS_URL`; unterminated tokens; M4's destructive wording; and the property that the lexer never
 // lowers a decision.
 import { describe, expect, it } from "vitest"
-import { createLexer, lexText, significantTokens } from "../../../src/guards/lexer.js"
+import { createLexer, lexText, relationNames, significantTokens } from "../../../src/guards/lexer.js"
 import { kindOf, raise, STATEMENT_KINDS, type StatementType } from "../../../src/domain/statements.js"
 
 const lexer = createLexer()
@@ -211,6 +211,21 @@ describe("the lexer's policy-tag facts (design §5.3)", () => {
     expect(found("SELECT a*b, c FROM t").usesStar).toBe(false)
   })
 
+  it("sees a whole row used as a value through an implicit alias, quoted or not (review H-2)", () => {
+    // The reproductions: a table name used as a value was not recognised, only an explicit alias was.
+    expect(found("SELECT customers FROM ds.customers").aliasAsValue).toBe(true)
+    expect(found("SELECT customers FROM `invented-proj.ds.customers`").aliasAsValue).toBe(true)
+    expect(found("SELECT `c` FROM ds.customers AS c").aliasAsValue).toBe(true)
+    expect(found("SELECT `c` FROM `invented-proj.ds.customers` AS `c`").aliasAsValue).toBe(true)
+    expect(found("SELECT customers FROM `invented-proj`.`ds`.`customers`").aliasAsValue).toBe(true)
+    // A field access through either name is not the whole row.
+    expect(found("SELECT customers.id FROM ds.customers").aliasAsValue).toBe(false)
+    expect(found("SELECT `c`.id FROM ds.customers AS c").aliasAsValue).toBe(false)
+    expect(found("SELECT t.a FROM `p.d.t` AS t").aliasAsValue).toBe(false)
+    // A keyword-shaped table name is still a name.
+    expect(found("SELECT data FROM ds.data").aliasAsValue).toBe(true)
+  })
+
   it("sees an alias used as a value: SELECT t, TO_JSON(t), ARRAY_AGG(t), (SELECT AS STRUCT t.*)", () => {
     expect(found("SELECT t FROM `p.d.t` AS t").aliasAsValue).toBe(true)
     expect(found("SELECT TO_JSON(t) FROM `p.d.t` t").aliasAsValue).toBe(true)
@@ -219,6 +234,45 @@ describe("the lexer's policy-tag facts (design §5.3)", () => {
     // A field access is not the whole row.
     expect(found("SELECT t.a FROM `p.d.t` AS t").aliasAsValue).toBe(false)
     expect(found("SELECT * FROM `p.d.t` AS t WHERE t.a = 1").aliasAsValue).toBe(false)
+  })
+})
+
+describe("the relation names expansion follows (review H-3, LOW 1)", () => {
+  const names = (sql: string) => {
+    const result = lexer.lex(sql)
+    if (!result.ok) throw new Error(sql)
+    return relationNames(result.tokens)
+  }
+
+  it("names the table paths a FROM or JOIN gives, 2 to 4 parts, and not one-part names or calls", () => {
+    expect(names("SELECT * FROM ds.customers AS c JOIN `invented-proj`.other.orders o ON TRUE").tables).toEqual([
+      ["ds", "customers"],
+      ["invented-proj", "other", "orders"],
+    ])
+    expect(names("WITH x AS (SELECT 1) SELECT * FROM x").tables).toEqual([])
+    expect(names("SELECT * FROM UNNEST([1, 2]) AS n").tables).toEqual([])
+  })
+
+  it("names the dotted calls, and never the effect or SAFE namespaces", () => {
+    expect(names("SELECT ds.wrapper(id), `p`.`ds`.tvf(id) FROM t").calls).toEqual([
+      ["ds", "wrapper"],
+      ["p", "ds", "tvf"],
+    ])
+    expect(names("SELECT SAFE.SUBSTR(x, 1, 2), ML.GENERATE_TEXT(MODEL m), OBJ.GET_ACCESS_URL(r, 'r')").calls).toEqual([])
+    expect(names("SELECT COUNT(*), SUBSTR(x, 1) FROM t").calls).toEqual([])
+  })
+
+  it("distinguishes a table function from a table, and records INFORMATION_SCHEMA's level", () => {
+    expect(names("SELECT * FROM ds.tvf(1)").calls).toEqual([["ds", "tvf"]])
+    expect(names("SELECT * FROM ds.tvf(1)").tables).toEqual([])
+    expect(names("SELECT * FROM `region-us`.INFORMATION_SCHEMA.TABLES").informationSchema).toEqual([{ level: "region", parts: ["region-us", "INFORMATION_SCHEMA", "TABLES"] }])
+    expect(names("SELECT * FROM `invented-proj`.INFORMATION_SCHEMA.TABLES").informationSchema).toEqual([{ level: "project", parts: ["invented-proj", "INFORMATION_SCHEMA", "TABLES"] }])
+    expect(names("SELECT * FROM `invented-proj`.sales.INFORMATION_SCHEMA.COLUMNS").informationSchema).toEqual([{ level: "dataset", parts: ["invented-proj", "sales", "INFORMATION_SCHEMA", "COLUMNS"] }])
+  })
+
+  it("finds names behind comments and backquotes", () => {
+    expect(names("SELECT * FROM /* x */ ds . `tvf` (1)").calls).toEqual([["ds", "tvf"]])
+    expect(names("SELECT * FROM\n`p`.`d`.`t`").tables).toEqual([["p", "d", "t"]])
   })
 })
 

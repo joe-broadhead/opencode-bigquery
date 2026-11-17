@@ -20,9 +20,11 @@
  *   (`CLASSIFICATION_DRIFT`).
  */
 import { BigQueryError, type ErrorCode } from "../domain/errors.js"
+import { actionOf } from "../domain/actions.js"
+import { tableResource } from "../domain/accounts.js"
 import type { Accuracy, DatasetReference, DryRunStatistics, QueryParameter, TableInfo, RoutineInfo } from "../domain/google.js"
 import { path } from "../domain/identifiers.js"
-import type { Findings } from "../domain/lexer-api.js"
+import type { Findings, Token } from "../domain/lexer-api.js"
 import { kindOf, raise, type Kind, type StatementType } from "../domain/statements.js"
 import type { Options } from "../options.js"
 import type { JobStatus, Ports, ResultPage } from "../ports.js"
@@ -31,10 +33,11 @@ import { asCallError } from "./callerrors.js"
 import { capVerdict, type CapVerdict } from "./cap.js"
 import { capAndBudget, usdFor, type Warning } from "./cost.js"
 import { Expander, type ExpansionResult } from "./expansion.js"
-import { assertFenced, type FenceObject } from "./fence.js"
+import { rowGate, type RowGate } from "./rows.js"
+import { assertFenced, isFenced, type FenceObject } from "./fence.js"
 import { hintsFor } from "./hints.js"
 import { failureFor } from "./jobfail.js"
-import { createLexer, hasKeyword } from "./lexer.js"
+import { createLexer, hasKeyword, relationNames } from "./lexer.js"
 import { limiterFor } from "./limits.js"
 import { toQueryParameters } from "./params.js"
 import { policyVerdict, type PolicyVerdict } from "./policy.js"
@@ -43,6 +46,7 @@ import { RowPolicyProber, type RowVerdict } from "./rowpolicy.js"
 import { sessionHash } from "./session.js"
 import { locationOf, projectOf, settingsOf, type AccountSettings } from "./settings.js"
 import type { TableFacts } from "./tables.js"
+import type { Call } from "../tool-spec.js"
 
 /** What a read needs besides its own input: the ports, the account, the call and the tool it is running for. */
 export interface ReadContext {
@@ -54,15 +58,20 @@ export interface ReadContext {
   readonly signal: AbortSignal
   /** The tool, for the `oc_tool` label: `bigquery_query`, `bigquery_profile`, `saved_read`. */
   readonly via: string
+  /** The tool's action, which the per-table assert names (design §5.4). */
+  readonly action: string
+  /** The call, for the per-table assert: `<account>:table:<project>.<dataset>.<name>` for every referenced object. */
+  readonly call: Call
 }
 
 export function readContext(input: {
   readonly ports: Ports
   readonly options: Options
   readonly account: string
-  readonly call: { readonly sessionID: string; readonly signal: AbortSignal }
+  readonly call: Call
   readonly via: string
 }): ReadContext {
+  const tool = input.via.startsWith("bigquery_") ? input.via.slice("bigquery_".length) : input.via
   return {
     ports: input.ports,
     options: input.options,
@@ -71,6 +80,8 @@ export function readContext(input: {
     sessionID: input.call.sessionID,
     signal: input.call.signal,
     via: input.via,
+    action: actionOf(tool).action,
+    call: input.call,
   }
 }
 
@@ -133,6 +144,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
   const project = projectOf(context.settings, request.project)
   const location = locationOf(context.settings, request.location)
   const useCache = request.useCache ?? true
+  assertWideInformationSchema(context.settings.fence, lexed.tokens)
 
   let answer: { readonly location: string; readonly statistics?: DryRunStatistics }
   try {
@@ -184,13 +196,17 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
     project,
     signal: context.signal,
     location: answer.location,
-    tables: cacheOf<TableInfo>(context.ports, "expand.tables", 60_000, now),
-    routines: cacheOf<RoutineInfo>(context.ports, "expand.routines", 60_000, now),
+    tables: cacheOf<TableInfo>(context.ports.clock, "expand.tables", 60_000, now),
+    routines: cacheOf<RoutineInfo>(context.ports.clock, "expand.routines", 60_000, now),
     lexer,
   })
   let expansion: ExpansionResult
   try {
-    expansion = await expander.expand(statistics)
+    expansion = await expander.expand({
+      statistics,
+      tokens: lexed.tokens,
+      ...(request.defaultDataset ? { defaultDataset: request.defaultDataset } : {}),
+    })
   } catch (error) {
     throw asCallError(error, "The references could not be resolved")
   }
@@ -218,10 +234,13 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
   }
 
   assertFenced(context.settings.fence, fenceObjects(statistics, expansion))
+  // §5.4's second fence: a person's own rule names every referenced object, so `deny bigquery.query on
+  // work:table:*.hr.*` is consulted too.
+  await assertObjectResourcesFor(context, fenceObjects(statistics, expansion))
 
   const prober = new RowPolicyProber(
     { ports: context.ports, account: context.account, project, signal: context.signal },
-    cacheOf<RowVerdict>(context.ports, "rowpolicy", 10 * 60_000, now),
+    cacheOf<RowVerdict>(context.ports.clock, "rowpolicy", 10 * 60_000, now),
   )
   const cap = await capVerdict({ statistics, bytes, tables: expansion.tables, effects, unresolved: expansion.unresolved, rowPolicy: (facts) => prober.probe(facts) })
 
@@ -296,6 +315,8 @@ export interface ReadRun {
   readonly totalRows?: number
   readonly returned?: number
   readonly truncated?: ShapedRows["truncated"]
+  /** False when rows were withheld from the model: the policy-tag rule or the account's inline option. */
+  readonly inline?: boolean
   readonly warnings: readonly Warning[]
   readonly bytesBilled: number
   readonly bytesProcessed: number
@@ -328,7 +349,7 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
   const timeoutSeconds = Math.max(1, Math.min(input.timeoutSeconds ?? context.options.jobTimeoutSeconds, 21_600))
   const jobId = `oc_${context.ports.clock.uuid()}`
   const labels = { oc_plugin: "opencode-bigquery", oc_tool: labelOf(context.via), oc_session: session }
-  const limiter = limiterFor(context.ports, context.account, context.options.maxConcurrentJobs)
+  const limiter = limiterFor(context.ports.clock, context.account, context.options.maxConcurrentJobs)
 
   let status: JobStatus
   try {
@@ -353,6 +374,10 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
   } catch (error) {
     throw asCallError(error, "The query job did not start")
   }
+
+  // A job this process started is remembered by id, so `bigquery_job` can reuse the text-aware verdict instead of
+  // failing closed on every tagged table (review H-1).
+  rememberJob(context.ports.clock, context.account, status.ref.jobId, prepared)
 
   const bytesBilled = status.totalBytesBilled ?? 0
   const job = { project: status.ref.projectId, jobId: status.ref.jobId, location: status.ref.location ?? prepared.location }
@@ -387,7 +412,7 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
     warnings: [...budget.warnings],
     bytesBilled,
     bytesProcessed: status.totalBytesProcessed ?? prepared.bytes,
-    cacheHit: status.cacheHit === true || (bytesBilled === 0 && status.state === "DONE" && prepared.bytes > 0),
+    cacheHit: status.cacheHit === true,
     usd: usdFor(bytesBilled, context.options),
   }
 
@@ -429,23 +454,18 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
   if (prepared.accuracy === "LOWER_BOUND") {
     warnings.push({ code: "ESTIMATE_LOWER_BOUND", message: "The dry run's estimate is a lower bound, so what is billed may be more." })
   }
-  const savedOnly = !prepared.policy.inline
-  const denied = inlineDenied(context.options, context.account, prepared.tables)
-  if (savedOnly) {
-    warnings.push({ code: "POLICY_TAGGED_SOURCE", message: `${prepared.policy.why ?? "A referenced table has a policy-tagged column"}; no rows are inline.` })
-  }
-  if (denied) {
-    warnings.push({ code: "INLINE_DENIED", message: "A referenced dataset is save-only by the account's inline option, so no rows are inline." })
-  }
+  const gate = rowGate({ options: context.options, account: context.account, settings: context.settings, tables: prepared.tables, policy: prepared.policy })
+  warnings.push(...gate.warnings)
 
   return {
     ...base,
     state: "done",
     page,
+    inline: gate.inline,
     columns: shaped.columns,
-    rows: savedOnly || denied ? [] : shaped.rows,
+    rows: gate.inline ? shaped.rows : [],
     totalRows: page.totalRows ?? page.rows.length,
-    returned: savedOnly || denied ? 0 : shaped.returned,
+    returned: gate.inline ? shaped.returned : 0,
     truncated: shaped.truncated,
     warnings,
   }
@@ -482,8 +502,72 @@ function driftOf(prepared: PreparedRead, status: JobStatus): string | undefined 
 }
 
 function dropExpansionCaches(ports: Ports): void {
-  cacheOf<TableInfo>(ports, "expand.tables", 60_000, Date.now).clear()
-  cacheOf<RoutineInfo>(ports, "expand.routines", 60_000, Date.now).clear()
+  cacheOf<TableInfo>(ports.clock, "expand.tables", 60_000, Date.now).clear()
+  cacheOf<RoutineInfo>(ports.clock, "expand.routines", 60_000, Date.now).clear()
+}
+
+// ── the jobs this process started, for `bigquery_job`'s reuse of a text-aware verdict ────────────────────────────
+
+const jobVerdicts = new WeakMap<object, Map<string, PreparedRead>>()
+const MAX_JOBS = 64
+
+export function rememberJob(owner: object, account: string, jobId: string, prepared: PreparedRead): void {
+  let perOwner = jobVerdicts.get(owner)
+  if (!perOwner) {
+    perOwner = new Map()
+    jobVerdicts.set(owner, perOwner)
+  }
+  perOwner.set(`${account}|${jobId}`, prepared)
+  while (perOwner.size > MAX_JOBS) {
+    const oldest = perOwner.keys().next().value
+    if (oldest === undefined) break
+    perOwner.delete(oldest)
+  }
+}
+
+export function jobVerdict(owner: object, account: string, jobId: string): PreparedRead | undefined {
+  return jobVerdicts.get(owner)?.get(`${account}|${jobId}`)
+}
+
+/**
+ * §5.4's second fence: the tool's own action asserted again with every referenced object as a resource
+ * (`<account>:table:<project>.<dataset>.<name>`), so a person's OpenCode rule fences too (review M-2).
+ */
+export async function assertObjectResources(
+  input: { readonly call: Call; readonly account: string; readonly action: string; readonly via: string; readonly objects: readonly FenceObject[] },
+): Promise<void> {
+  if (input.objects.length === 0) return
+  const resources = [...new Set(input.objects.map((object) => tableResource(input.account, object.project, object.dataset, object.name)))]
+  await input.call.assert({
+    action: input.action,
+    resources,
+    metadata: { account: input.account, tool: input.via, objects: input.objects.length },
+  })
+}
+
+/** The per-table assert through a read context. */
+async function assertObjectResourcesFor(context: ReadContext, objects: readonly FenceObject[]): Promise<void> {
+  await assertObjectResources({ call: context.call, account: context.account, action: context.action, via: context.via, objects })
+}
+
+/**
+ * An allow fence cannot confine a region- or project-level `INFORMATION_SCHEMA` view: it names every dataset in the
+ * region or project, and Google's dry run need not list any fenced object for it (review LOW 1). A dataset-qualified
+ * one is allowed only when its dataset is inside the fence. Deny-only fences are unchanged.
+ */
+function assertWideInformationSchema(fence: AccountSettings["fence"], tokens: readonly Token[]): void {
+  if (fence?.allow === undefined) return
+  for (const ref of relationNames(tokens).informationSchema) {
+    if (ref.level === "dataset") {
+      const [project, dataset] = ref.parts
+      if (project !== undefined && dataset !== undefined && !isFenced(fence, { project, dataset, name: "INFORMATION_SCHEMA", kind: "view" })) continue
+    }
+    throw new BigQueryError(
+      "DATASET_FENCED",
+      "The query reads a region- or project-level INFORMATION_SCHEMA view, which an allow fence cannot confine",
+      "Use bigquery_search, which filters its matches through the fence, or ask the user to change the account's datasets option.",
+    )
+  }
 }
 
 /** Every object the fence judges: the dry run's four lists, then everything expansion reached. */
@@ -512,7 +596,9 @@ function fenceObjects(statistics: DryRunStatistics, expansion: ExpansionResult):
 /** A dotted path from expansion, each part validated; anything else is "an object". */
 function safeName(dotted: string): string {
   const parts = dotted.split(".")
-  return parts.length === 3 ? path(parts[0]!, parts[1]!, parts[2]!) : "an object"
+  if (parts.length === 3) return path(parts[0]!, parts[1]!, parts[2]!)
+  if (parts.length === 2) return path(parts[0]!, parts[1]!)
+  return "an object"
 }
 
 /** A value in a `next` or `message`: a plain identifier, in backquotes when it is one, otherwise `object`. */
@@ -523,16 +609,4 @@ function plain(value: string): string {
 /** A label value: lowercase letters, digits, underscores and dashes, at most 63. */
 function labelOf(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 63) || "tool"
-}
-
-/** Whether the account's `inline.deny` makes a referenced dataset save-only (design §7, Q11). */
-export function inlineDenied(options: Options, account: string, tables: readonly TableFacts[]): boolean {
-  const deny = settingsOf(options, account).inlineDeny
-  if (deny.length === 0) return false
-  return tables.some((facts) => deny.some((pattern) => inlineMatches(pattern, facts.project, facts.dataset)))
-}
-
-/** An `inline.deny` pattern, matched on `project.dataset` like the fence. */
-function inlineMatches(pattern: string, project: string, dataset: string): boolean {
-  return new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\?]/g, "\\$&").replace(/\*/g, ".*")}$`, "i").test(`${project}.${dataset}`)
 }

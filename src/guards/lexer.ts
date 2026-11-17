@@ -343,20 +343,10 @@ export function findings(tokens: readonly Token[]): Findings {
     else if (hint === "standardsql" && dialectHint === undefined) dialectHint = "standard"
   }
 
-  // ── calls that act or bill outside BigQuery, and routine calls ──────
-  for (let index = 0; index < all.length; index += 1) {
-    const token = all[index]!
-    if (!isWord(token) && token.kind !== "quoted") continue
-    const parts: string[] = [...tokenParts(token)]
-    let end = index
-    // A dotted name may be split over backquoted parts, bare words, comments and whitespace: `ml` /* x */ . `f`.
-    while (isPunct(all[end + 1], ".") && (isWord(all[end + 2]) || all[end + 2]?.kind === "quoted")) {
-      parts.push(...tokenParts(all[end + 2]!))
-      end += 2
-    }
-    const called = isPunct(all[end + 1], "(")
-    index = end
-    if (!called) continue
+  // ── calls that act or bill outside BigQuery ──────────────────────────
+  for (const chain of chains(all)) {
+    if (!chain.called) continue
+    const parts = chain.parts.map((part) => part.toUpperCase())
     const [first, second] = parts
     if (parts.length === 1 && first === "EXTERNAL_QUERY") effects.push("EXTERNAL_QUERY")
     else if (parts.length >= 2 && parts.at(-2) === "OBJ" && parts.at(-1) === "GET_ACCESS_URL") effects.push("OBJ.GET_ACCESS_URL")
@@ -404,21 +394,27 @@ export function findings(tokens: readonly Token[]): Findings {
     if (token.kind === "quoted") for (const part of token.parts ?? []) columnNames.add(part.toUpperCase())
   }
 
-  const aliases = tableAliases(all)
+  const items = fromItems(all)
   return {
     ...(raised.length > 0 ? { raisesTo: raised.reduce<Kind>((highest, kind) => stricter(highest, kind), "read") } : {}),
     externalEffects: [...new Set(effects)],
     ...(dialectHint ? { dialectHint } : {}),
     columnNames,
     usesStar: usesStar(all),
-    aliasAsValue: usesAliasAsValue(all, aliases),
+    aliasAsValue: usesAliasAsValue(all, items),
   }
 }
 
-/** A token's name parts, upper-cased: a bare word, or a backquoted path's own parts. */
+/** A token's name parts, upper-cased for comparison: a bare word, or a backquoted path's own parts. */
 function tokenParts(token: Token): string[] {
   if (token.kind === "quoted") return (token.parts ?? [token.value]).map((part) => part.toUpperCase())
   return [token.value.toUpperCase()]
+}
+
+/** A token's name parts exactly as written: an object's name, which is not case-folded. */
+function tokenNames(token: Token): string[] {
+  if (token.kind === "quoted") return [...(token.parts ?? [token.value])]
+  return [token.text]
 }
 
 /** The statement segments: significant tokens split on `;`. */
@@ -455,63 +451,201 @@ function usesStar(tokens: readonly Token[]): boolean {
   return false
 }
 
-/** The names a `FROM` or `JOIN` gives a table, upper-cased. */
-function tableAliases(tokens: readonly Token[]): ReadonlySet<string> {
-  const aliases = new Set<string>()
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index]!
-    const word = isWord(token) ? token.value.toUpperCase() : ""
-    if (word !== "FROM" && word !== "JOIN") continue
-    let at = index + 1
-    // UNNEST(...) or (SELECT …): the alias may follow the closing parenthesis.
-    if (isPunct(tokens[at], "(") || (isWord(tokens[at]) && tokens[at]!.value.toUpperCase() === "UNNEST")) {
-      let depth = 0
-      while (at < tokens.length) {
-        if (isPunct(tokens[at], "(")) depth += 1
-        else if (isPunct(tokens[at], ")")) {
-          depth -= 1
-          if (depth === 0) {
-            at += 1
-            break
-          }
-        }
-        at += 1
-      }
-    } else {
-      // A table path: word/quoted, then `.` word/quoted, repeated.
-      if (!isWord(tokens[at]) && tokens[at]?.kind !== "quoted") continue
-      at += 1
-      while (isPunct(tokens[at], ".") && (isWord(tokens[at + 1]) || tokens[at + 1]?.kind === "quoted")) at += 2
-    }
-    if (isWord(tokens[at]) && tokens[at]!.value.toUpperCase() === "AS") at += 1
-    const alias = tokens[at]
-    if (!isWord(alias) || CLAUSE_WORDS.has(alias.value.toUpperCase())) continue
-    aliases.add(alias.value.toUpperCase())
-  }
-  return aliases
+/** One dotted name in the stream: its parts, where it ends, and whether a `(` follows it. */
+interface Chain {
+  readonly parts: readonly string[]
+  readonly end: number
+  readonly called: boolean
 }
 
-/** Whether an alias is used as a value: `SELECT t`, `TO_JSON(t)`, `ARRAY_AGG(t)`, `SELECT AS STRUCT t.*`. */
-function usesAliasAsValue(tokens: readonly Token[], aliases: ReadonlySet<string>): boolean {
-  if (aliases.size === 0) return false
+/** Every dotted name, including one split over backquotes, bare words, comments and whitespace (`ml` /* x *\/ . `f`). */
+function chains(tokens: readonly Token[]): Chain[] {
+  const out: Chain[] = []
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index]!
-    if (!isWord(token)) continue
-    const name = token.value.toUpperCase()
-    if (!aliases.has(name)) continue
+    if (!isWord(token) && token.kind !== "quoted") continue
+    const parts = [...tokenNames(token)]
+    let end = index
+    while (isPunct(tokens[end + 1], ".") && (isWord(tokens[end + 2]) || tokens[end + 2]?.kind === "quoted")) {
+      parts.push(...tokenNames(tokens[end + 2]!))
+      end += 2
+    }
+    out.push({ parts, end, called: isPunct(tokens[end + 1], "(") })
+    index = end
+  }
+  return out
+}
+
+/** One source in a `FROM` or `JOIN` clause: the path it names, its alias, and the tokens that are the path itself. */
+interface FromItem {
+  readonly parts: readonly string[]
+  readonly pathIndices: readonly number[]
+  readonly called: boolean
+  readonly alias?: { readonly index: number; readonly name: string }
+}
+
+/** The index after the `)` that closes the `(` at `at`. */
+function afterParens(tokens: readonly Token[], at: number): number {
+  let depth = 0
+  for (let index = at; index < tokens.length; index += 1) {
+    if (isPunct(tokens[index], "(")) depth += 1
+    else if (isPunct(tokens[index], ")")) {
+      depth -= 1
+      if (depth === 0) return index + 1
+    }
+  }
+  return tokens.length
+}
+
+/**
+ * Every source a `FROM` or `JOIN` names, with the alias it gives it — explicit (`AS t`, `t`), or, with none, the last
+ * segment of its path (the implicit alias a `SELECT customers FROM ds.customers` uses as a whole-row value).
+ */
+function fromItems(tokens: readonly Token[]): FromItem[] {
+  const out: FromItem[] = []
+  for (let index = 0; index < tokens.length; index += 1) {
+    const word = isWord(tokens[index]) ? tokens[index]!.value.toUpperCase() : ""
+    if (word !== "FROM" && word !== "JOIN") continue
+    let at = index + 1
+    const parts: string[] = []
+    const pathIndices: number[] = []
+    let called = false
+    if (isPunct(tokens[at], "(")) {
+      at = afterParens(tokens, at)
+    } else if (isWord(tokens[at]) || tokens[at]?.kind === "quoted") {
+      parts.push(...tokenNames(tokens[at]!))
+      pathIndices.push(at)
+      at += 1
+      while (isPunct(tokens[at], ".") && (isWord(tokens[at + 1]) || tokens[at + 1]?.kind === "quoted")) {
+        parts.push(...tokenNames(tokens[at + 1]!))
+        pathIndices.push(at + 1)
+        at += 2
+      }
+      if (isPunct(tokens[at], "(")) {
+        called = true
+        at = afterParens(tokens, at)
+      }
+    } else continue
+
+    let alias: FromItem["alias"]
+    const candidate = tokens[at]
+    if (isWord(candidate) && candidate.value.toUpperCase() === "AS") {
+      const name = tokens[at + 1]
+      if (isWord(name) || name?.kind === "quoted") alias = { index: at + 1, name: tokenParts(name!)[0] ?? "" }
+    } else if (isWord(candidate) && !CLAUSE_WORDS.has(candidate.value.toUpperCase())) {
+      alias = { index: at, name: tokenParts(candidate)[0] ?? "" }
+    } else if (candidate?.kind === "quoted") {
+      alias = { index: at, name: tokenParts(candidate)[0] ?? "" }
+    }
+    out.push({ parts, pathIndices, called, ...(alias ? { alias } : {}) })
+  }
+  return out
+}
+
+/**
+ * Whether a whole row may reach the model as a value: `SELECT t`, `TO_JSON(t)`, `ARRAY_AGG(t)`, `SELECT AS STRUCT t.*`,
+ * and the implicit form `SELECT customers FROM ds.customers`. A name counts when it equals a source's alias or, with
+ * none, the last segment of its path, and is not a field access (`t.col`) or the path itself. Quotes make no difference,
+ * and an ambiguous case counts (the question is only ever whether rows may come inline).
+ */
+function usesAliasAsValue(tokens: readonly Token[], items: readonly FromItem[]): boolean {
+  const names = new Set<string>()
+  const notValues = new Set<number>()
+  for (const item of items) {
+    const name = item.alias?.name ?? item.parts.at(-1)
+    if (!name) continue
+    names.add(name.toUpperCase())
+    for (const index of item.pathIndices) notValues.add(index)
+    if (item.alias) notValues.add(item.alias.index)
+  }
+  if (names.size === 0) return false
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!
+    if (token.kind !== "identifier" && token.kind !== "keyword" && token.kind !== "quoted") continue
+    if (notValues.has(index)) continue
+    const name = token.kind === "quoted" ? (token.parts?.length === 1 ? token.parts[0]!.toUpperCase() : undefined) : token.value.toUpperCase()
+    if (name === undefined || !names.has(name)) continue
     const before = tokens[index - 1]
     const after = tokens[index + 1]
-    // The definition itself, a field access, and a table path's last part are not values.
     if (isPunct(before, ".")) continue
-    if (before !== undefined && isWord(before) && (before.value.toUpperCase() === "AS" || before.value.toUpperCase() === "FROM" || before.value.toUpperCase() === "JOIN")) continue
     if (isPunct(after, ".")) {
-      // `t.*` expands the whole row: an alias used as a value. `t.col` is not.
+      // `t.*` expands the whole row: a value. `t.col` is not.
       if (isPunct(tokens[index + 2], "*")) return true
       continue
     }
     return true
   }
   return false
+}
+
+/** An INFORMATION_SCHEMA view the lexer saw: dataset-qualified, or project/region-qualified and unconfined by a fence. */
+export interface InformationSchemaRef {
+  readonly level: "region" | "project" | "dataset"
+  readonly parts: readonly string[]
+}
+
+/** The objects a text names that expansion must follow: table paths, qualified calls, and INFORMATION_SCHEMA views. */
+export interface RelationNames {
+  /** Paths after `FROM`/`JOIN`, 2 to 4 parts. */
+  readonly tables: readonly (readonly string[])[]
+  /** Dotted calls, `ds.fn(` or `p.ds.fn(`, without the effect namespaces. */
+  readonly calls: readonly (readonly string[])[]
+  readonly informationSchema: readonly InformationSchemaRef[]
+}
+
+const EFFECT_NAMESPACES: ReadonlySet<string> = new Set(["SAFE", "ML", "AI", "OBJ"])
+
+/**
+ * What a text names (review H-2, H-3, LOW 1): the sources after `FROM`/`JOIN`, the dotted calls, and every
+ * INFORMATION_SCHEMA view. Combinations are deduplicated, so one text is one list per kind.
+ */
+export function relationNames(tokens: readonly Token[]): RelationNames {
+  const all = significantTokens(tokens)
+  const tables: string[][] = []
+  const calls: string[][] = []
+  const informationSchema: InformationSchemaRef[] = []
+  const seen = new Set<string>()
+
+  const addTable = (parts: readonly string[]) => {
+    if (parts.length < 2 || parts.length > 4) return
+    // INFORMATION_SCHEMA is a reserved dataset of views, not storage: it is metadata, and `tables.get` has no such table.
+    if (parts.some((part) => part.toUpperCase() === "INFORMATION_SCHEMA")) return
+    const key = parts.join(".")
+    if (seen.has(`t|${key}`)) return
+    seen.add(`t|${key}`)
+    tables.push([...parts])
+  }
+  const addCall = (parts: readonly string[]) => {
+    if (parts.length < 2 || parts.length > 3) return
+    if (EFFECT_NAMESPACES.has((parts[0] ?? "").toUpperCase())) return
+    const key = parts.join(".")
+    if (seen.has(`c|${key}`)) return
+    seen.add(`c|${key}`)
+    calls.push([...parts])
+  }
+
+  for (const item of fromItems(all)) {
+    if (item.called) addCall(item.parts)
+    else addTable(item.parts)
+  }
+  for (const chain of chains(all)) {
+    if (chain.called) addCall(chain.parts)
+    const at = chain.parts.findIndex((part) => part.toUpperCase() === "INFORMATION_SCHEMA")
+    if (at === 1) {
+      const key = chain.parts.join(".")
+      if (!seen.has(`i|${key}`)) {
+        seen.add(`i|${key}`)
+        informationSchema.push({ level: /^REGION-/i.test(chain.parts[0] ?? "") ? "region" : "project", parts: [...chain.parts] })
+      }
+    } else if (at === 2) {
+      const key = chain.parts.join(".")
+      if (!seen.has(`i|${key}`)) {
+        seen.add(`i|${key}`)
+        informationSchema.push({ level: "dataset", parts: [...chain.parts] })
+      }
+    }
+  }
+  return { tables, calls, informationSchema }
 }
 
 /** Whether a keyword appears in a token stream, for the hints (a `LIMIT` over a full scan). */

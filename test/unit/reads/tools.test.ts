@@ -3,6 +3,7 @@
 // as a query; the free tools make only free calls.
 import { describe, expect, it } from "vitest"
 import { BigQueryError } from "../../../src/domain/errors.js"
+import { SCHEMAS } from "../../../src/domain/contract.js"
 import { LOCATION, PROJECT, callsOf, harness, jobStatus, nativeTable, one, resultPage, runTool, scriptNativeRead, statistics, tableRef } from "./support.js"
 
 describe("bigquery_list", () => {
@@ -275,6 +276,76 @@ describe("bigquery_job", () => {
   })
 })
 
+describe("bigquery_job's row gate (review H-1)", () => {
+  const tagged = nativeTable({ schema: { fields: [{ name: "id", type: "INT64" }, { name: "ssn", type: "STRING", policyTags: { names: ["projects/p/locations/us/taxonomies/1/policyTags/2"] } }] } })
+
+  it("withholds a running tagged query's rows, reusing the verdict the query made", async () => {
+    const h = harness()
+    scriptNativeRead(h.bigquery, { table: tagged, page: { complete: false, rows: [] } })
+    const first = await runTool(h, "query", { sql: "SELECT ssn FROM `invented-proj.sales.orders`", wait: 0 })
+    expect(first.output.state).toBe("running")
+    const jobId = (first.output.job as { jobId: string }).jobId
+
+    // The job finishes, and the model follows `next` to bigquery_job.
+    h.bigquery.on("getJob", async () => jobStatus())
+    h.bigquery.on("results", async () => resultPage({ rows: [{ f: [{ v: "1" }, { v: "123-45-6789" }] }], totalRows: 1 }))
+    const { output } = await runTool(h, "job", { project: PROJECT, jobId })
+    expect(output).toMatchObject({ state: "done", rows: [], returned: 0 })
+    expect((output.warnings as { code: string }[]).map((item) => item.code)).toContain("POLICY_TAGGED_SOURCE")
+    expect(String(output.next)).toContain("bigquery_save")
+  })
+
+  it("refuses a job over a fenced dataset before reading any rows", async () => {
+    const h = harness(undefined, { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { allow: [`${PROJECT}.sales`] } } } })
+    h.bigquery.on("getJob", async () => jobStatus({ referencedTables: [tableRef("orders", "private")] }))
+    const { output } = await runTool(h, "job", { project: PROJECT, jobId: "oc_1" })
+    expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+    expect(String(output.message)).toContain("`private`")
+    expect(callsOf(h.bigquery, "results")).toEqual([])
+  })
+
+  it("withholds an unprepared job's rows when its table is tagged, when the account marks it inline.deny, or when the job is a script", async () => {
+    const cases: { name: string; table: ReturnType<typeof nativeTable>; status: ReturnType<typeof jobStatus>; extra?: Record<string, unknown> }[] = [
+      { name: "tagged", table: tagged, status: jobStatus({ referencedTables: [tableRef()] }) },
+      { name: "inline.deny", table: nativeTable(), status: jobStatus({ referencedTables: [tableRef()] }), extra: { accounts: { default: { billingProject: PROJECT, location: LOCATION, inline: { deny: [`${PROJECT}.sales`] } } } } },
+      { name: "script", table: nativeTable(), status: jobStatus({ statementType: "SCRIPT", referencedTables: [] }) },
+    ]
+    for (const item of cases) {
+      const h = harness(undefined, item.extra ?? {})
+      h.bigquery.on("getJob", async () => item.status)
+      h.bigquery.on("getTable", async () => item.table)
+      h.bigquery.on("results", async () => resultPage())
+      const { output } = await runTool(h, "job", { project: PROJECT, jobId: "oc_console" })
+      expect(output, item.name).toMatchObject({ state: "done", rows: [], returned: 0 })
+      expect(String(output.next), item.name).toContain("bigquery_save")
+    }
+  })
+
+  it("returns an unprepared job's rows when no table is tagged and nothing is denied, asserting the table (review M-2)", async () => {
+    const h = harness()
+    h.bigquery.on("getJob", async () => jobStatus({ referencedTables: [tableRef()] }))
+    h.bigquery.on("getTable", async () => nativeTable())
+    h.bigquery.on("results", async () => resultPage())
+    const { output, asserted } = await runTool(h, "job", { project: PROJECT, jobId: "oc_console" })
+    expect(output).toMatchObject({ state: "done", returned: 2 })
+    expect(asserted.some((request) => request.action === "bigquery.job" && request.resources.includes("default:table:invented-proj.sales.orders"))).toBe(true)
+  })
+
+  it("records a finished job this plugin started, under the tool it names; the ledger's jobId makes it one line (review M-1)", async () => {
+    const h = harness()
+    h.bigquery.on("getJob", async () => jobStatus({ labels: { oc_plugin: "opencode-bigquery", oc_tool: "bigquery_query", oc_session: "abcdefabcdefabcd" } }))
+    h.bigquery.on("getTable", async () => nativeTable())
+    h.bigquery.on("results", async () => resultPage())
+    await runTool(h, "job", { project: PROJECT, jobId: "oc_plugin_job" })
+    await runTool(h, "job", { project: PROJECT, jobId: "oc_plugin_job" })
+    // The handler cannot know whether another call already recorded it; `record` skips a jobId it holds (cost.test.ts).
+    expect(h.ledger.entries.length).toBeGreaterThan(0)
+    for (const entry of h.ledger.entries) {
+      expect(entry).toMatchObject({ jobId: "oc_00000000-0000-4000-8000-000000000001", bytesBilled: 1048576, via: "bigquery_query", session: "abcdefabcdefabcd" })
+    }
+  })
+})
+
 describe("bigquery_jobs", () => {
   it("lists the account's jobs newest first with labels, bytes and a cut SQL preview", async () => {
     const h = harness()
@@ -362,6 +433,26 @@ describe("bigquery_profile", () => {
     const sql = (one(callsOf(h.bigquery, "dryRun"))[0] as { sql: string }).sql
     expect(sql).toContain("`id`")
     expect(sql).not.toContain("`ssn`")
+  })
+
+  it("lets the model ask for tagged columns, but only the person's option allows them (review H-2.3)", async () => {
+    // The input may only ask while Day 0's schema still has the field (contract request 7 removes it); this stays
+    // correct either way.
+    const canAsk = SCHEMAS.profile.input.safeParse({ table: "sales.orders", policyTagged: "allow" }).success
+    const ask = canAsk ? { policyTagged: "allow" as const } : {}
+    const h = harness()
+    h.bigquery.on("getTable", async () => nativeTable({ schema: { fields: [{ name: "id", type: "INT64" }, { name: "ssn", type: "STRING", policyTags: { names: ["projects/p/locations/us/taxonomies/1/policyTags/2"] } }] } }))
+    const refused = await runTool(h, "profile", { table: "sales.orders", columns: ["ssn"], ...ask })
+    expect(refused.output).toMatchObject({ state: "refused", error: "COLUMN_DENIED" })
+    // The next step never tells the model to pass policyTagged itself.
+    expect(String(refused.output.next)).not.toContain("policyTagged: allow")
+
+    // With the option set by the person, the same input profiles it.
+    const allowed = harness(undefined, { policyTagged: "allow" })
+    scriptNativeRead(allowed.bigquery, { table: nativeTable({ schema: { fields: [{ name: "ssn", type: "STRING", policyTags: { names: ["projects/p/locations/us/taxonomies/1/policyTags/2"] } }] } }) })
+    const profiled = await runTool(allowed, "profile", { table: "sales.orders", columns: ["ssn"], ...ask })
+    expect(profiled.output).toMatchObject({ state: "done" })
+    expect((one(callsOf(allowed.bigquery, "dryRun"))[0] as { sql: string }).sql).toContain("`ssn`")
   })
 
   it("refuses TABLESAMPLE on a row-secured table, and refuses a view", async () => {

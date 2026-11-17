@@ -66,7 +66,7 @@ describe("expansion (§5.1 step 4)", () => {
       },
     }
     const { expand } = expander(world)
-    const result = await expand.expand(statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v1")] }))
+    const result = await expand.expand({ statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v1")] }) })
     expect(result.unresolved).toEqual([])
     expect(result.views.map((facts) => facts.table)).toEqual(["v1", "v2", "v3"])
     expect(result.tables.map((facts) => facts.table)).toEqual(["base"])
@@ -87,7 +87,7 @@ describe("expansion (§5.1 step 4)", () => {
       },
     }
     const { expand } = expander(world)
-    const result = await expand.expand(statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v1")] }))
+    const result = await expand.expand({ statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v1")] }) })
     expect(result.unresolved).toEqual([path("v4")])
   })
 
@@ -102,16 +102,16 @@ describe("expansion (§5.1 step 4)", () => {
       bodies: { "SELECT 1": "denied" },
     }
     const { expand } = expander(world)
-    const result = await expand.expand(
-      statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("secret"), refOf("nobody"), refOf("legacy"), refOf("unanalysable")] }),
-    )
+    const result = await expand.expand({
+      statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("secret"), refOf("nobody"), refOf("legacy"), refOf("unanalysable")] }),
+    })
     expect([...result.unresolved].sort()).toEqual([path("legacy"), path("nobody"), path("secret"), path("unanalysable")].sort())
   })
 
   it("a view body that dry-runs without statistics is unresolved", async () => {
     const world: World = { tables: { [path("v")]: view("v", "SELECT 1") }, bodies: { "SELECT 1": "no-statistics" } }
     const { expand } = expander(world)
-    const result = await expand.expand(statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v")] }))
+    const result = await expand.expand({ statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v")] }) })
     expect(result.unresolved).toEqual([path("v")])
   })
 
@@ -121,7 +121,7 @@ describe("expansion (§5.1 step 4)", () => {
       throw new BigQueryError("AUTH_REQUIRED", "the sign-in expired")
     })
     const expand = new Expander({ ports, account: ACCOUNT, project: PROJECT, signal: new AbortController().signal, tables: new TtlCache(60_000, Date.now), routines: new TtlCache(60_000, Date.now) })
-    await expect(expand.expand(statistics({ referencedTables: [refOf("orders")] }))).rejects.toThrow(/AUTH_REQUIRED/)
+    await expect(expand.expand({ statistics: statistics({ referencedTables: [refOf("orders")] }) })).rejects.toThrow(/AUTH_REQUIRED/)
   })
 
   it("a view over a base table another dataset holds puts that base in front of the fence", async () => {
@@ -185,15 +185,89 @@ describe("expansion (§5.1 step 4)", () => {
     }
   })
 
+  it("follows a table function's body into the fence: a TVF over a fenced table is refused (review H-3)", async () => {
+    const h = harness(undefined, { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { allow: [`${PROJECT}.sales`] } } } })
+    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "tvf" }] }) }))
+    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) =>
+      routine({ routineReference: ref, routineType: "TABLE_VALUED_FUNCTION", language: "SQL", definitionBody: "SELECT * FROM `invented-proj.private.secret`" }),
+    )
+    h.bigquery.on("getTable", async (_account: string, ref: { projectId: string; datasetId: string; tableId: string }) => nativeTable({ tableReference: ref }))
+    const { output } = await runTool(h, "query", { sql: "SELECT * FROM `invented-proj.sales.tvf`()" })
+    expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+    expect(String(output.message)).toContain("`private`")
+    expect(callsOf(h.bigquery, "run")).toEqual([])
+  })
+
+  it("follows a table function's body into the cap: a TVF over a row-secured table cannot be bounded (review H-3)", async () => {
+    const h = harness()
+    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "tvf" }] }) }))
+    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) =>
+      routine({ routineReference: ref, routineType: "TABLE_VALUED_FUNCTION", language: "SQL", definitionBody: "SELECT * FROM `invented-proj.sales.orders`" }),
+    )
+    h.bigquery.on("getTable", async (_account: string, ref: { projectId: string; datasetId: string; tableId: string }) => nativeTable({ tableReference: ref }))
+    h.bigquery.on("listRowAccessPolicies", async () => ({ items: [{ policyId: "invented" }] }))
+    const { output } = await runTool(h, "query", { sql: "SELECT * FROM `invented-proj.sales.tvf`()" })
+    expect(needsPlan(output)).toBe("CAP_NOT_ENFORCEABLE")
+    expect(String(output.message)).toContain("row access policy")
+    expect(callsOf(h.bigquery, "run")).toEqual([])
+  })
+
+  it("follows a SQL UDF's body to the remote function it calls (review H-3)", async () => {
+    const h = harness()
+    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [refOf("orders")], referencedRoutines: [] }) }))
+    h.bigquery.on("getTable", async (_account: string, ref: { projectId: string; datasetId: string; tableId: string }) => nativeTable({ tableReference: ref }))
+    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) =>
+      ref.routineId === "wrapper"
+        ? routine({ routineReference: ref, language: "SQL", definitionBody: "SELECT `invented-proj.sales.remote_fn`(x)" })
+        : routine({ routineReference: ref, remoteFunctionOptions: { endpoint: "https://invented.invalid/fn" } }),
+    )
+    // The dry run did not list the routine; the text's qualified call is what expansion follows.
+    const { output } = await runTool(h, "query", { sql: "SELECT `invented-proj.sales.wrapper`(id) FROM `invented-proj.sales.orders`" })
+    expect(needsPlan(output)).toBe("EXTERNAL_EFFECTS")
+    expect(String(output.message)).toContain("a remote function")
+    expect(callsOf(h.bigquery, "run")).toEqual([])
+  })
+
+  it("treats a JavaScript UDF, and a SQL routine with no body, as needing a plan (review H-3)", async () => {
+    const scripted = harness()
+    scripted.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "js" }] }) }))
+    scripted.bigquery.on("getRoutine", async (_account: string, ref: never) => routine({ routineReference: ref, language: "JAVASCRIPT", definitionBody: "return x;" }))
+    expect(needsPlan((await runTool(scripted, "query", { sql: "SELECT `invented-proj.sales.js`(id)" })).output)).toBe("EXTERNAL_EFFECTS")
+
+    const noBody = harness()
+    noBody.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "fn" }] }) }))
+    noBody.bigquery.on("getRoutine", async (_account: string, ref: never) => routine({ routineReference: ref, language: "SQL" }))
+    expect(needsPlan((await runTool(noBody, "query", { sql: "SELECT `invented-proj.sales.fn`(id)" })).output)).toBe("UNRESOLVED_REFERENCE")
+  })
+
+  it("stops a SQL routine chain at depth 3 (review H-3)", async () => {
+    const h = harness()
+    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "fn1" }] }) }))
+    h.bigquery.on("getRoutine", async (_account: string, ref: { projectId: string; datasetId: string; routineId: string }) => {
+      const next = Number(ref.routineId.slice(2)) + 1
+      return routine({ routineReference: ref, language: "SQL", definitionBody: next <= 4 ? `SELECT \`invented-proj.sales.fn${next}\`(x)` : "SELECT x" })
+    })
+    const { output } = await runTool(h, "query", { sql: "SELECT `invented-proj.sales.fn1`(id)" })
+    expect(needsPlan(output)).toBe("UNRESOLVED_REFERENCE")
+    expect(String(output.message)).toContain("`fn4`")
+  })
+
+  it("treats a view body's dry run without a statement type as unresolved (review LOW 2)", async () => {
+    const world: World = { tables: { [path("v")]: view("v", "SELECT 1") }, bodies: { "SELECT 1": { totalBytesProcessed: "10" } as DryRunStatistics } }
+    const { expand } = expander(world)
+    const result = await expand.expand({ statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v")] }) })
+    expect(result.unresolved).toEqual([path("v")])
+  })
+
   it("caches a table's answer for 60 s, so two expansions in the window fetch it once", async () => {
     const world: World = { tables: { [path("orders")]: nativeTable() } }
     const { ports, expand, clock } = expander(world)
     const stats = statistics()
-    await expand.expand(stats)
-    await expand.expand(stats)
+    await expand.expand({ statistics: stats })
+    await expand.expand({ statistics: stats })
     expect(callsOf(ports.bigquery, "getTable")).toHaveLength(1)
     clock.time += 60_001
-    await expand.expand(stats)
+    await expand.expand({ statistics: stats })
     expect(callsOf(ports.bigquery, "getTable")).toHaveLength(2)
   })
 
@@ -204,9 +278,9 @@ describe("expansion (§5.1 step 4)", () => {
       bodies: { "SELECT 1": { statementType: "SELECT", referencedTables: [refOf("orders")] } },
     }
     const { expand } = expander(world)
-    const result = await expand.expand(
-      statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v")], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "fn" }] }),
-    )
+    const result = await expand.expand({
+      statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v")], referencedRoutines: [{ projectId: PROJECT, datasetId: DATASET, routineId: "fn" }] }),
+    })
     expect([...result.seenViews]).toEqual([path("v")])
     expect([...result.seenRoutines]).toEqual([path("fn")])
     expect(one(result.routines).language).toBe("SQL")

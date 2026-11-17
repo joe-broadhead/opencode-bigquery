@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest"
 import { ASKS } from "../../../src/domain/actions.js"
 import { needsPlan } from "./expect.js"
-import { callsOf, harness, jobStatus, one, resultPage, runTool, scriptNativeRead, signedIn, statistics } from "./support.js"
+import { LOCATION, PROJECT, callsOf, harness, jobStatus, one, resultPage, runTool, scriptNativeRead, signedIn, statistics } from "./support.js"
 
 const SQL = "SELECT id FROM `invented-proj.sales.orders`"
 
@@ -87,6 +87,44 @@ describe("the read path's order (§5.1)", () => {
     expect(run).not.toHaveProperty("createSession")
     expect(run).not.toHaveProperty("connectionProperties")
     expect(run).not.toHaveProperty("writeDisposition")
+  })
+
+  it("asserts every referenced table as a resource after the fence (review M-2)", async () => {
+    const h = harness()
+    scriptNativeRead(h.bigquery)
+    const { asserted } = await runTool(h, "query", { sql: SQL })
+    const tableAssert = asserted.find((request) => request.action === "bigquery.query" && request.resources.includes("default:table:invented-proj.sales.orders"))
+    expect(tableAssert).toBeDefined()
+  })
+
+  it("stops before the run when a person's rule denies the table resource (review M-2)", async () => {
+    const h = harness()
+    scriptNativeRead(h.bigquery)
+    await expect(runTool(h, "query", { sql: SQL }, { deny: (request) => request.resources.some((resource) => resource.includes(":table:")) })).rejects.toThrow("denied by the rules")
+    expect(callsOf(h.bigquery, "run")).toEqual([])
+  })
+
+  it("refuses a region-level INFORMATION_SCHEMA view under an allow fence, and allows it under a deny-only one (review LOW 1)", async () => {
+    const fenced = harness(undefined, { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { allow: [`${PROJECT}.sales`] } } } })
+    scriptNativeRead(fenced.bigquery)
+    const refused = await runTool(fenced, "query", { sql: "SELECT * FROM `region-us`.INFORMATION_SCHEMA.TABLES" })
+    expect(refused.output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+    expect(fenced.bigquery.calls).toEqual([])
+
+    const denied = harness(undefined, { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { deny: [`${PROJECT}.private`] } } } })
+    scriptNativeRead(denied.bigquery)
+    expect((await runTool(denied, "query", { sql: "SELECT * FROM `region-us`.INFORMATION_SCHEMA.TABLES" })).output).toMatchObject({ state: "done" })
+
+    // A dataset-qualified view inside the fence is allowed.
+    const inside = harness(undefined, { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { allow: [`${PROJECT}.sales`] } } } })
+    scriptNativeRead(inside.bigquery)
+    expect((await runTool(inside, "query", { sql: "SELECT * FROM `invented-proj`.sales.INFORMATION_SCHEMA.COLUMNS" })).output).toMatchObject({ state: "done" })
+  })
+
+  it("reports Google's cacheHit only, never an inference from 0 bytes billed (review LOW 3)", async () => {
+    const h = harness()
+    scriptNativeRead(h.bigquery, { status: jobStatus({ totalBytesBilled: 0, cacheHit: undefined }) })
+    expect((await runTool(h, "query", { sql: SQL })).output.cacheHit).toBe(false)
   })
 
   it("pins the run to the location the dry run chose", async () => {

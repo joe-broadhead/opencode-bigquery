@@ -83,6 +83,9 @@ export async function capAndBudget(input: CapAndBudgetInput): Promise<CapAndBudg
     budget.daily !== undefined ? input.ports.ledger.spent({ account: input.account, since: localDayStart(input.now) }) : Promise.resolve(0),
     budget.session !== undefined ? input.ports.ledger.spent({ account: input.account, since: 0, session: input.session }) : Promise.resolve(0),
   ])
+  // NOTE (review LOW 4): each concurrent call reads the same remaining budget, so parallel calls can overspend by up to
+  // `maxConcurrentJobs` x what is left. Reserving each running job's cap would close that; the ledger's actual bytes and
+  // the job poll's recording (review M-1) are the bound this version ships with.
   const left: number[] = []
   if (budget.daily !== undefined) left.push(budget.daily - today)
   if (budget.session !== undefined) left.push(budget.session - session)

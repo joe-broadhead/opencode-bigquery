@@ -21,9 +21,14 @@ import { cacheOf } from "../guards/cache.js"
 import { assertFenced, isFenced } from "../guards/fence.js"
 import { failureFor, googleErrorText } from "../guards/jobfail.js"
 import { createLexer } from "../guards/lexer.js"
-import { inlineDenied, prepareRead, readContext, runRead, saveNext, type PreparedRead, type ReadContext, type ReadRun } from "../guards/read.js"
+import { actionOf } from "../domain/actions.js"
+import { assertObjectResources, jobVerdict, prepareRead, readContext, runRead, saveNext, type PreparedRead, type ReadContext, type ReadRun } from "../guards/read.js"
 import { cellValue, rowValues, shapeRows } from "../guards/results.js"
 import { RowPolicyProber, type RowVerdict } from "../guards/rowpolicy.js"
+import { inlineDenied, rowGate } from "../guards/rows.js"
+import type { PolicyVerdict } from "../guards/policy.js"
+import type { FenceObject } from "../guards/fence.js"
+import { sessionHash } from "../guards/session.js"
 import { locationOf, projectOf, settingsOf } from "../guards/settings.js"
 import { quoteIdent, quoteLiteral, tableSql } from "../guards/sql.js"
 import { flattenSchema, GROUPABLE, isOrderable, isStruct, NUMERIC_TYPES, tableFacts, type TableFacts } from "../guards/tables.js"
@@ -165,14 +170,21 @@ async function sampleRows(facts: TableFacts, rows: number, context: HandlerConte
   if (facts.columns.length === 0) return unavailable("The table's schema names no column to read")
   const readable = facts.columns.filter((field) => !facts.tagged.includes(field.name))
   if (readable.length === 0) return unavailable("Every column of the table is policy-tagged")
-  // Q11's inline option covers every row that would reach the model, a sample included.
-  if (inlineDenied(context.options, context.account, [facts])) {
-    return { ...unavailable("The account's inline option makes this dataset save-only"), warnings: [{ code: "INLINE_DENIED", message: "A referenced dataset is save-only by the account's inline option, so the sample is not read." }] }
-  }
+  // §5.4's per-table assert, and the shared row gate: Q11's inline option covers every row that would reach the
+  // model, a sample included (review M-2, H-1).
+  await assertObjectResources({
+    call: context.call,
+    account: context.account,
+    action: actionOf("table").action,
+    via: "bigquery_table",
+    objects: [{ project: facts.project, dataset: facts.dataset, name: facts.table, kind: "table" }],
+  })
+  const gate = rowGate({ options: context.options, account: context.account, settings: settingsOf(context.options, context.account), tables: [facts], policy: { inline: true } })
+  if (!gate.inline) return { ...unavailable("The account's inline option makes this dataset save-only"), warnings: [...gate.warnings] }
 
   const prober = new RowPolicyProber(
     { ports: context.ports, account: context.account, project: facts.project, signal: context.call.signal },
-    cacheOf<RowVerdict>(context.ports, "rowpolicy", 10 * 60_000, () => context.ports.clock.now()),
+    cacheOf<RowVerdict>(context.ports.clock, "rowpolicy", 10 * 60_000, () => context.ports.clock.now()),
   )
   const verdict = await prober.probe(facts)
   if (verdict.state === "secured") return unavailable("The table has a row access policy, so a sample could show rows the caller may not read")
@@ -508,7 +520,7 @@ function queryResult(prepared: PreparedRead, run: ReadRun, context: HandlerConte
     }
   }
   if (run.state === "running") return { state: "running" as const, job: run.job, ...costFields, next: jobNext(run.job) }
-  const saved = !prepared.policy.inline || inlineDenied(context.options, context.account, prepared.tables)
+  const saved = run.inline === false
   const more = run.truncated?.rows === true || run.truncated?.bytes === true
   return {
     state: "done" as const,
@@ -570,6 +582,9 @@ const job: Handlers["job"] = async (input, context) => {
   const maxRows = input.maxRows ?? context.options.maxRows
   const wait = input.wait ?? 0
 
+  // The fence, the per-table assert and the policy verdict come before any page is read (review H-1, M-2).
+  let gate = await jobGate(status, context)
+
   // A job still running: `wait` long-polls with getQueryResults, whose answer is the job's own state once it finishes.
   if (status.state !== "DONE") {
     if (wait <= 0) return { ...out, next: jobNext(shown) }
@@ -592,9 +607,13 @@ const job: Handlers["job"] = async (input, context) => {
       out.next = polledFailure.next
       return out
     }
-    return { ...out, ...pageOf(polled.page, maxRows, context) }
+    await recordFinishedJob(context, finished)
+    // The finished job's referenced lists may carry things the running status did not.
+    if (jobObjectKey(finished) !== jobObjectKey(status)) gate = await jobGate(finished, context)
+    return withJobRows(out, polled.page, finished, maxRows, gate, context)
   }
 
+  await recordFinishedJob(context, status)
   if (maxRows <= 0 || !RESULT_TYPES.has(status.statementType ?? "")) return out
   let page: ResultPage
   try {
@@ -611,7 +630,109 @@ const job: Handlers["job"] = async (input, context) => {
     throw error
   }
   if (!page.complete) return { ...out, next: jobNext(shown) }
-  return { ...out, ...pageOf(page, maxRows, context) }
+  return withJobRows(out, page, status, maxRows, gate, context)
+}
+
+/**
+ * The row gate for a job (review H-1): the fence and the per-table assert over every object `jobs.get` names, then the
+ * policy-tag rule — from the verdict of a query this process prepared, or fail-closed (save-only) for any other job,
+ * because its full SQL is not available.
+ */
+async function jobGate(status: JobStatus, context: HandlerContext) {
+  const settings = settingsOf(context.options, context.account)
+  const objects = jobObjects(status)
+  assertFenced(settings.fence, objects)
+  await assertObjectResources({ call: context.call, account: context.account, action: actionOf("job").action, via: "bigquery_job", objects })
+
+  const prepared = jobVerdict(context.ports.clock, context.account, status.ref.jobId)
+  const { facts, unknown } = prepared ? { facts: prepared.tables, unknown: false } : await jobTables(context, status)
+  const policy: PolicyVerdict = prepared
+    ? prepared.policy
+    : status.statementType === "SCRIPT" || status.statementType === "CALL"
+      ? { inline: false, why: "the job is a script or procedure whose reads this process cannot see" }
+      : unknown
+        ? { inline: false, why: "the metadata of a table the job references could not be read" }
+        : facts.some((table) => table.tagged.length > 0)
+          ? { inline: false, why: "the job references a table with policy-tagged columns, and this process did not prepare it" }
+          : { inline: true }
+  return { ...rowGate({ options: context.options, account: context.account, settings, tables: facts, policy }), facts }
+}
+
+/** The page's rows, through the gate; a save-only answer names `bigquery_save`, exactly as `bigquery_query`. */
+function withJobRows(out: OutputOf<"job">, page: ResultPage, status: JobStatus, maxRows: number, gate: ReturnType<typeof jobGate> extends Promise<infer T> ? T : never, context: HandlerContext): OutputOf<"job"> {
+  const rows = pageOf(page, maxRows, context)
+  const warnings = [...((out.warnings as { code: string; message: string }[] | undefined) ?? []), ...gate.warnings]
+  return {
+    ...out,
+    ...(gate.inline ? rows : { ...rows, rows: [], returned: 0 }),
+    ...(gate.inline ? {} : { next: saveNext({ project: status.ref.projectId, jobId: status.ref.jobId, location: status.ref.location ?? "" }) }),
+    ...(warnings.length > 0 ? { warnings } : {}),
+  }
+}
+
+/** The job's object list as one comparable string, so a finished job's change is noticed. */
+function jobObjectKey(status: JobStatus): string {
+  return jobObjects(status)
+    .map((object) => `${object.kind}|${object.project}.${object.dataset}.${object.name}`)
+    .sort()
+    .join(",")
+}
+
+/** The objects a job names, as the fence and the per-table assert see them. */
+function jobObjects(status: JobStatus): FenceObject[] {
+  const out: FenceObject[] = []
+  for (const ref of status.referencedTables ?? []) out.push({ project: ref.projectId, dataset: ref.datasetId, name: ref.tableId, kind: "table" })
+  for (const ref of status.referencedLogicalViews ?? []) out.push({ project: ref.projectId, dataset: ref.datasetId, name: ref.tableId, kind: "view" })
+  for (const ref of status.referencedRoutines ?? []) out.push({ project: ref.projectId, dataset: ref.datasetId, name: ref.routineId, kind: "routine" })
+  return out
+}
+
+/** The tables and views a job names, read for the policy rule; `unknown` when one cannot be read. */
+async function jobTables(context: HandlerContext, status: JobStatus): Promise<{ facts: TableFacts[]; unknown: boolean }> {
+  const facts: TableFacts[] = []
+  const seen = new Set<string>()
+  let unknown = false
+  const cache = cacheOf<TableInfo>(context.ports.clock, "expand.tables", 60_000, () => context.ports.clock.now())
+  for (const ref of [...(status.referencedTables ?? []), ...(status.referencedLogicalViews ?? [])]) {
+    const key = `${ref.projectId}.${ref.datasetId}.${ref.tableId}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    try {
+      const cached = cache.get(`${context.account}|${key}`)
+      const info = cached ?? (await context.ports.bigquery.getTable(context.account, ref, context.call.signal))
+      if (!cached) cache.set(`${context.account}|${key}`, info)
+      facts.push(tableFacts(info))
+    } catch (error) {
+      if (error instanceof BigQueryError && error.code === "NOT_FOUND") unknown = true
+      else if (error instanceof BigQueryError && (error.code === "PERMISSION_DENIED" || error.code === "COLUMN_DENIED")) unknown = true
+      else throw error
+    }
+  }
+  return { facts, unknown }
+}
+
+/** Record a finished job this plugin started, by jobId; the ledger ignores a job it already holds (review M-1). */
+async function recordFinishedJob(context: HandlerContext, status: JobStatus): Promise<void> {
+  const labels = status.labels ?? {}
+  if (labels.oc_plugin !== "opencode-bigquery" || status.state !== "DONE") return
+  const billed = status.totalBytesBilled ?? 0
+  if (billed <= 0) return
+  const via = /^[a-z0-9_-]{1,63}$/.test(labels.oc_tool ?? "") ? labels.oc_tool! : "bigquery_job"
+  const session = /^[0-9a-f]{16}$/.test(labels.oc_session ?? "") ? labels.oc_session! : sessionHash(context.call.sessionID)
+  try {
+    await context.ports.ledger.record({
+      at: new Date(status.endTime ?? context.ports.clock.now()).toISOString(),
+      account: context.account,
+      project: status.ref.projectId,
+      location: status.ref.location ?? "",
+      jobId: status.ref.jobId,
+      bytesBilled: billed,
+      via,
+      session,
+    })
+  } catch {
+    // A finished job's result must not be lost to a ledger write; the next budget check is the loser by one job.
+  }
 }
 
 /** The rows and their columns, from one result page. */
@@ -690,7 +811,10 @@ const jobs: Handlers["jobs"] = async (input, context) => {
 const profile: Handlers["profile"] = async (input, context) => {
   const settings = settingsOf(context.options, context.account)
   const project = projectOf(settings, input.project)
-  const allowTagged = input.policyTagged === "allow"
+  // The model may only ask; the person's option is what allows a tagged column (review H-2.3). The input is read
+  // through a cast, so this keeps working when Day 0 drops `ProfileInput.policyTagged` (contract request 7).
+  const requested = (input as { readonly policyTagged?: "allow" }).policyTagged === "allow"
+  const allowTagged = requested && context.options.policyTagged === "allow"
   const signal = context.call.signal
   const rc = readContext({ ports: context.ports, options: context.options, account: context.account, call: context.call, via: "bigquery_profile" })
 
@@ -706,7 +830,7 @@ const profile: Handlers["profile"] = async (input, context) => {
       if (facts.storage !== "native") throw invalid("TABLESAMPLE needs native BigQuery storage")
       const prober = new RowPolicyProber(
         { ports: context.ports, account: context.account, project, signal },
-        cacheOf<RowVerdict>(context.ports, "rowpolicy", 10 * 60_000, () => context.ports.clock.now()),
+        cacheOf<RowVerdict>(context.ports.clock, "rowpolicy", 10 * 60_000, () => context.ports.clock.now()),
       )
       const verdict = await prober.probe(facts)
       if (verdict.state !== "none") throw invalid("TABLESAMPLE cannot be combined with a row access policy, and the table may have one")
@@ -717,7 +841,9 @@ const profile: Handlers["profile"] = async (input, context) => {
   }
 
   const chosen = chooseColumns(input.columns, facts, allowTagged)
-  if (chosen.length === 0) throw invalid("No column is left to profile", "Name the columns, or pass policyTagged: allow to include tagged ones.")
+  if (chosen.length === 0) {
+    throw invalid("No column is left to profile", "Name the columns; a policy-tagged column needs the user's policyTagged option, which the model cannot set.")
+  }
 
   const prepared = await prepareRead(
     rc,
@@ -730,7 +856,11 @@ const profile: Handlers["profile"] = async (input, context) => {
     "read",
   )
   if (!allowTagged && !prepared.policy.inline) {
-    throw new BigQueryError("COLUMN_DENIED", prepared.policy.why ?? "A profiled column is policy-tagged", "Leave that column out, or pass policyTagged: allow after the user agrees.")
+    throw new BigQueryError(
+      "COLUMN_DENIED",
+      prepared.policy.why ?? "A profiled column is policy-tagged",
+      "Leave that column out; only the plugin's policyTagged option, which the user sets, can allow a tagged column.",
+    )
   }
   const run = await runRead(rc, prepared, { maxRows: chosen.length, waitSeconds: 30 })
   if (run.state === "running") throw new BigQueryError("JOB_TIMEOUT", "The profile query is still running", "Run the aggregate yourself with bigquery_query, or try again.")
@@ -784,7 +914,11 @@ function chooseColumns(requested: readonly string[] | undefined, facts: TableFac
       const field = facts.columns.find((item) => item.name === name)
       if (!field) throw invalid(`The table has no column named ${column(name, 1)} in its schema`)
       if (!allowTagged && facts.tagged.includes(field.name)) {
-        throw new BigQueryError("COLUMN_DENIED", `The column ${column(name, 1)} of the table ${path(facts.project, facts.dataset, facts.table)} is policy-tagged`, "Leave it out, or pass policyTagged: allow after the user agrees.")
+        throw new BigQueryError(
+          "COLUMN_DENIED",
+          `The column ${column(name, 1)} of the table ${path(facts.project, facts.dataset, facts.table)} is policy-tagged`,
+          "Leave it out; only the plugin's policyTagged option, which the user sets, can allow a tagged column.",
+        )
       }
     }
     return requested.map((name) => {
@@ -795,7 +929,10 @@ function chooseColumns(requested: readonly string[] | undefined, facts: TableFac
   return facts.columns.filter((field) => !isStruct(field) && (allowTagged || !facts.tagged.includes(field.name))).map((field) => ({ name: field.name, type: field.type, ...(field.mode === "REPEATED" ? { repeated: true } : {}) }))
 }
 
-/** One aggregate query over the source: nulls, distinct, min/max, quantiles and the top five values per column. */
+/**
+ * One query with one `UNION ALL` arm per column: nulls, distinct, min/max, quantiles and the top five values. An arm over
+ * a table source reads the table once per arm, and `TABLESAMPLE` draws per arm; the dry run is what bounds the cost.
+ */
 function profileSql(source: string, columns: readonly { name: string; type?: string; repeated?: boolean }[], typed: boolean): string {
   const arms = columns.map((entry) => {
     const ident = quoteIdent(entry.name)
