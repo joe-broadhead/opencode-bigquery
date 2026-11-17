@@ -34,50 +34,51 @@ function fakeGoogle() {
     clientId: CLIENT_ID,
     refresh: "1//invented-host-refresh-token",
   }
-  const server = Bun.serve({
-    port: 0,
-    hostname: "127.0.0.1",
-    async fetch(request) {
-      const url = new URL(request.url)
-      if (url.pathname === "/tokeninfo") return Response.json({ email: "ada@example.invalid", email_verified: true })
-      if (url.pathname !== "/token") return Response.json({ error: "not_found" }, { status: 404 })
-      const text = await request.text()
-      const form: Record<string, string> = {}
-      for (const [key, value] of new URLSearchParams(text)) form[key] = value
-      const grant = form["grant_type"]
-      const dpop = request.headers.get("DPoP") !== null
-      requests.push({ path: url.pathname, ...(grant !== undefined ? { grant } : {}), dpop, form })
-      if (grant === "authorization_code") {
-        return Response.json(
-          {
-            access_token: "ya29.invented-host-access-token",
-            expires_in: 3600,
-            token_type: "Bearer",
-            scope: state.scopes.join(" "),
-            refresh_token: state.refresh,
-            id_token: inventedIdToken({ clientId: state.clientId, email: "ada@example.invalid" }),
-          },
-          { headers: { "DPoP-Nonce": "nonce-one" } },
-        )
-      }
-      // The deliberate proof-less refresh: a 400 is what "bound" means.
-      if (!dpop) return Response.json({ error: "invalid_request", error_description: "DPoP proof required" }, { status: 400 })
+  const handler = async (request: Request): Promise<Response> => {
+    const url = new URL(request.url)
+    if (url.pathname === "/tokeninfo") return Response.json({ email: "ada@example.invalid", email_verified: true })
+    if (url.pathname !== "/token") return Response.json({ error: "not_found" }, { status: 404 })
+    const text = await request.text()
+    const form: Record<string, string> = {}
+    for (const [key, value] of new URLSearchParams(text)) form[key] = value
+    const grant = form["grant_type"]
+    const dpop = request.headers.get("DPoP") !== null
+    requests.push({ path: url.pathname, ...(grant !== undefined ? { grant } : {}), dpop, form })
+    if (grant === "authorization_code") {
       return Response.json(
         {
-          access_token: "ya29.invented-host-access-token-refreshed",
+          access_token: "ya29.invented-host-access-token",
           expires_in: 3600,
           token_type: "Bearer",
           scope: state.scopes.join(" "),
+          refresh_token: state.refresh,
           id_token: inventedIdToken({ clientId: state.clientId, email: "ada@example.invalid" }),
         },
-        { headers: { "DPoP-Nonce": "nonce-two" } },
+        { headers: { "DPoP-Nonce": "nonce-one" } },
       )
-    },
-  })
+    }
+    // The deliberate proof-less refresh: a 400 is what "bound" means.
+    if (!dpop) return Response.json({ error: "invalid_request", error_description: "DPoP proof required" }, { status: 400 })
+    return Response.json(
+      {
+        access_token: "ya29.invented-host-access-token-refreshed",
+        expires_in: 3600,
+        token_type: "Bearer",
+        scope: state.scopes.join(" "),
+        id_token: inventedIdToken({ clientId: state.clientId, email: "ada@example.invalid" }),
+      },
+      { headers: { "DPoP-Nonce": "nonce-two" } },
+    )
+  }
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: handler })
+  // The auth flow's token endpoint: the fake itself, not the host's global router, so the sign-in is deterministic on
+  // every architecture. It is a `fetch` function (a URL and init), while Bun.serve hands its handler a Request.
+  const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => handler(new Request(input, init))) as typeof globalThis.fetch
   return {
     origin: `http://127.0.0.1:${server.port}`,
     requests,
     state,
+    fetch: fakeFetch,
     close: () => server.stop(true),
   }
 }
@@ -124,7 +125,7 @@ describe("package A in a host", () => {
     const host = await startHost({ fake })
     try {
       const options = loadOptions({ accounts: { default: { billingProject: "invented-proj" } } })
-      await registerAuth(host.probe(), { options, fetch: globalThis.fetch, stateDir: stateDir() })
+      await registerAuth(host.probe(), { options, fetch: fake.fetch, stateDir: stateDir() })
 
       const info = (await host.client.integration.get({ integrationID: "bigquery-default", location: host.location })).data
       expect(info.name).toBe("Google Cloud (BigQuery)")
@@ -172,7 +173,7 @@ describe("package A in a host", () => {
       expect(fake.requests.every((request) => !request.path.includes("revoke"))).toBe(true)
 
       // Both checks, through the port the tools get: the record and the marker from this process's refresh.
-      const port = createAuthPort({ options, fetch: globalThis.fetch, stateDir: stateDir() })
+      const port = createAuthPort({ options, fetch: fake.fetch, stateDir: stateDir() })
       expect(await port.level("default", new AbortController().signal)).toEqual({ level: "write" })
       expect(fake.requests.filter((request) => request.grant === "refresh_token").at(-1)!.dpop).toBe(true)
     } finally {
@@ -187,7 +188,7 @@ describe("package A in a host", () => {
     const port = await freePort()
     try {
       const options = loadOptions({ redirectUri: "https://relay.invalid/return", callbackPort: port, accounts: { default: { billingProject: "invented-proj" } } })
-      await registerAuth(host.probe(), { options, fetch: globalThis.fetch, stateDir: stateDir() })
+      await registerAuth(host.probe(), { options, fetch: fake.fetch, stateDir: stateDir() })
       fake.state.scopes = [SCOPES.openid, SCOPES.email, SCOPES.bigquery, SCOPES.writeMarker]
       const clientJson = JSON.stringify({ web: { client_id: CLIENT_ID, client_secret: CLIENT_SECRET, redirect_uris: ["https://relay.invalid/return"] } })
       const attempt = await connect(host, {
@@ -218,7 +219,7 @@ describe("package A in a host", () => {
     const host = await startHost({ fake })
     try {
       const options = loadOptions({ accounts: { default: { billingProject: "invented-proj" } } })
-      await registerAuth(host.probe(), { options, fetch: globalThis.fetch, stateDir: stateDir() })
+      await registerAuth(host.probe(), { options, fetch: fake.fetch, stateDir: stateDir() })
       fake.state.scopes = [SCOPES.openid, SCOPES.email, SCOPES.bigquery, SCOPES.writeMarker]
       const write = await connect(host, { access: "write", confirmWrite: true, clientId: CLIENT_ID, clientSecret: CLIENT_SECRET })
       await callback(write.url)
@@ -240,7 +241,7 @@ describe("package A in a host", () => {
       expect(readKey(stateDir(), "default", secondKey)?.keyId).toBe(secondKey)
       expect(fake.requests.every((request) => !request.path.includes("revoke"))).toBe(true)
 
-      const port = createAuthPort({ options, fetch: globalThis.fetch, stateDir: stateDir() })
+      const port = createAuthPort({ options, fetch: fake.fetch, stateDir: stateDir() })
       expect(await port.level("default", new AbortController().signal)).toMatchObject({ level: "read", refusal: "ACCOUNT_READ_ONLY" })
     } finally {
       await host.close()
@@ -253,7 +254,7 @@ describe("package A in a host", () => {
     const host = await startHost({ fake })
     try {
       const options = loadOptions({ accounts: { default: { billingProject: "invented-proj" } } })
-      const registration = await registerAuth(host.probe(), { options, fetch: globalThis.fetch, stateDir: stateDir() })
+      const registration = await registerAuth(host.probe(), { options, fetch: fake.fetch, stateDir: stateDir() })
       const commands = (await host.probe().command.list()).data.map((command) => command.name)
       expect(commands).toContain("bigquery-doctor")
       expect(commands).toContain("bigquery-signout")
