@@ -410,7 +410,7 @@ function bodyViolation(kind: Operation["body"], body: unknown): string | undefin
     const problem = unknownKeys(body, QUERY_REQUEST, "QueryRequest")
     if (problem !== undefined) return problem
     if (body.formatOptions !== undefined) return unknownKeys(body.formatOptions, FORMAT_OPTIONS, "DataFormatOptions")
-    return undefined
+    return body.queryParameters === undefined ? undefined : parametersViolation(body.queryParameters)
   }
   const top = unknownKeys(body, JOB, "Job")
   if (top !== undefined) return top
@@ -426,7 +426,29 @@ function bodyViolation(kind: Operation["body"], body: unknown): string | undefin
   const field = unknownKeys(configuration, JOB_CONFIGURATION, "JobConfiguration")
   if (field !== undefined) return field
   const query = isObject(configuration) ? configuration.query : undefined
-  return query === undefined ? undefined : unknownKeys(query, JOB_QUERY, "JobConfigurationQuery")
+  if (query === undefined) return undefined
+  const problem = unknownKeys(query, JOB_QUERY, "JobConfigurationQuery")
+  if (problem !== undefined) return problem
+  return isObject(query) && query.queryParameters !== undefined ? parametersViolation(query.queryParameters) : undefined
+}
+
+/**
+ * `queryParameters[]` is Google's QueryParameter: `{ name?, parameterType, parameterValue }`, and a `parameterValue` is a
+ * QueryParameterValue, `{ value }` for a scalar and `{ arrayValues }`/`{ structValues }` for the others
+ * (https://cloud.google.com/bigquery/docs/reference/rest/v2/QueryParameter).
+ */
+function parametersViolation(parameters: unknown): string | undefined {
+  if (!Array.isArray(parameters)) return "queryParameters must be an array"
+  for (const parameter of parameters) {
+    if (!isObject(parameter)) return "a query parameter must be an object"
+    const unknown = Object.keys(parameter).filter((key) => !["name", "parameterType", "parameterValue"].includes(key))
+    if (unknown.length > 0) return `QueryParameter has no field "${unknown[0]}"`
+    if (!isObject(parameter.parameterType) || typeof parameter.parameterType.type !== "string") return "a query parameter needs a parameterType with a type"
+    if (!isObject(parameter.parameterValue)) return "a parameterValue is Google's QueryParameterValue, such as { value: \"1\" }"
+    const valueUnknown = Object.keys(parameter.parameterValue).filter((key) => !["value", "arrayValues", "structValues"].includes(key))
+    if (valueUnknown.length > 0) return `QueryParameterValue has no field "${valueUnknown[0]}"`
+  }
+  return undefined
 }
 
 function unknownKeys(value: unknown, allowed: ReadonlySet<string>, resource: string): string | undefined {

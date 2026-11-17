@@ -14,7 +14,7 @@ describe("the estimate", () => {
       fake.answer({ method: "POST", path: queries }, { status: 200, body: { kind: "bigquery#queryResponse", jobComplete: true, statementType: "SELECT", totalBytesProcessed: "1234567", totalBytesBilled: "0", cacheHit: false } })
       const { port } = portFor(fake)
 
-      const answer = await port.estimate(queryRequest({ params: [{ name: "id", parameterType: { type: "INT64" }, parameterValue: "1" }], location: "EU" }), signal())
+      const answer = await port.estimate(queryRequest({ params: [{ name: "id", parameterType: { type: "INT64" }, parameterValue: { value: "1" } }], location: "EU" }), signal())
 
       expect(answer).toEqual({ statementType: "SELECT", totalBytesProcessed: 1234567 })
       const body = fake.requests[0]!.body as { dryRun: boolean; maxResults: number; useLegacySql: boolean; query: string; parameterMode: string; location: string }

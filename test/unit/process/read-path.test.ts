@@ -48,6 +48,25 @@ describe("read path order", () => {
     })
   })
 
+  test("a table's partitions ride the same read path: INFORMATION_SCHEMA.PARTITIONS is a dry run and a run (contract PR #5)", async () => {
+    await withFake(async (fake) => {
+      replay(fake, fixture("dry-run-partitions"))
+      replay(fake, fixture("job-running"))
+      const { port } = portFor(fake)
+      const sql =
+        "SELECT partition_id, total_rows, total_logical_bytes FROM `invented-project.invented_dataset.INFORMATION_SCHEMA.PARTITIONS` WHERE table_name = 'invented_table'"
+
+      const status = await dryRunThenRun(port, queryRequest({ sql, location: "EU" }), signal())
+
+      expect(status.state).toBe("RUNNING")
+      const inserts = fake.requests.filter((request) => request.method === "POST" && request.path === jobsPath)
+      expect(inserts).toHaveLength(2)
+      expect((inserts[1]!.body as { configuration: { query: { query: string } } }).configuration.query.query).toBe(sql)
+      // The dry run's 10 MB minimum is what the guards see; nothing here treats it as free.
+      expect(fake.requests[0]!.query).toEqual({})
+    })
+  })
+
   test("every run carries the client job id, the cap, the labels and the time limit, and no destination or session", async () => {
     await withFake(async (fake) => {
       replay(fake, fixture("dry-run-select"))
@@ -83,7 +102,7 @@ describe("read path order", () => {
       const { port } = portFor(fake)
       const request = queryRequest({
         sql: "SELECT @id AS id",
-        params: [{ name: "id", parameterType: { type: "INT64" }, parameterValue: "1" }],
+        params: [{ name: "id", parameterType: { type: "INT64" }, parameterValue: { value: "1" } }],
         defaultDataset: { projectId: "invented-project", datasetId: "invented_dataset" },
       })
 
@@ -99,7 +118,7 @@ describe("read path order", () => {
       expect(JSON.parse(queries[0]!)).toMatchObject({
         query: "SELECT @id AS id",
         parameterMode: "NAMED",
-        queryParameters: [{ name: "id", parameterType: { type: "INT64" }, parameterValue: "1" }],
+        queryParameters: [{ name: "id", parameterType: { type: "INT64" }, parameterValue: { value: "1" } }],
         defaultDataset: { projectId: "invented-project", datasetId: "invented_dataset" },
       })
     })

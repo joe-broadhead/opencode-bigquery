@@ -27,6 +27,7 @@ const DOCS: Readonly<Record<string, { readonly page: string; readonly keys: read
   "row-access-policies": { page: "rowAccessPolicies/list", keys: ["rowAccessPolicies", "nextPageToken"] },
   "test-iam-permissions": { page: "tables/testIamPermissions", keys: ["permissions"] },
   "dry-run-select": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-partitions": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
   "job-running": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
   "job-done": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
   "job-bytes-billed": { page: "Job", keys: ["kind", "id", "jobReference", "configuration", "statistics", "status"] },
@@ -92,7 +93,7 @@ describe("fixtures", () => {
   })
 
   test("a Job is the Job resource, field by field", () => {
-    for (const name of ["dry-run-select", "job-running", "job-done", "job-bytes-billed", "job-bytes-billed-get", "job-timeout"]) {
+    for (const name of ["dry-run-select", "dry-run-partitions", "job-running", "job-done", "job-bytes-billed", "job-bytes-billed-get", "job-timeout"]) {
       const job = body(name)
       expectWithin(keysOf(job.jobReference), KEYS.jobReference, `${name} jobReference`)
       expectWithin(keysOf(job.configuration), KEYS.jobConfiguration, `${name} configuration`)
@@ -166,5 +167,10 @@ describe("fixtures", () => {
     expect(contractViolation({ method: "POST", path: "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_table/testIamPermissions" })).toBeUndefined()
     expect(contractViolation({ method: "POST", path: "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_table:testIamPermissions", body: { permissions: [] } })).toBeUndefined()
     expect(contractViolation({ method: "GET", path: jobPath, query: { projection: "FULL", stateFilter: "DONE" } })).toBeUndefined()
+    // A parameterValue is Google's QueryParameterValue, `{ value }`, not a bare scalar (src/ports.ts, PR #5).
+    const parameters = (parameterValue: unknown) => ({ method: "POST", path: jobPath, body: { configuration: { query: { query: "SELECT @id", queryParameters: [{ name: "id", parameterType: { type: "INT64" }, parameterValue }] } } } })
+    expect(contractViolation(parameters("1"))).toContain("QueryParameterValue")
+    expect(contractViolation(parameters({ value: "1" }))).toBeUndefined()
+    expect(contractViolation(parameters({ arrayValues: [{ value: "1" }] }))).toBeUndefined()
   })
 })
