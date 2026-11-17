@@ -15,6 +15,12 @@ Only the read tools are methods; a change runs only from the model's tool, after
 | Method | Class | The tool |
 | --- | --- | --- |
 | `describe` | none | Lists every method with its class, its permission action and whether it can run now. |
+| `status`, `list`, `table`, `search`, `estimate`, `query`, `job`, `jobs`, `profile`, `plan`, `events_list`, `saved_read` | read | The read tool of the same name, `bigquery_<name>`. |
+| `saved_list`, `probe` | read | The `bigquery.saved` source's set-up list, and the sources' identity probe. Methods only. |
+
+Each method's action is `bigquery.<name>`, resolved on `<account>:<operation>` before it runs. `query` with a `planId`
+is refused to a script (`PERMISSION_DENIED`): a read the byte cap cannot bound runs only after a person answers
+`bigquery.uncapped_read`, which a script cannot. Every tool answers `NOT_BUILT` until it is built.
 
 ## A script runs as a session
 

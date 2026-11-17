@@ -6,6 +6,8 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
 import { ERROR_CODES, ErrorCode } from "../../src/domain/errors.js"
+// @ts-expect-error: a plain script, with no types
+import { errorRows, withRows } from "../../scripts/docs-errors.mjs"
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url))
 const read = (file: string) => readFileSync(join(ROOT, file), "utf8")
@@ -48,6 +50,10 @@ describe("codes", () => {
       expect(entry.meaning, code).toMatch(/\.$/)
       expect(entry.next, code).toMatch(/\.$/)
     }
+  })
+
+  it("the docs' error rows are exactly the table's, generated", () => {
+    for (const file of ["README.md", "docs/configuration.md"]) expect(withRows(read(file), errorRows()), file).toBe(read(file))
   })
 
   it("the README's Troubleshooting table lists exactly the plugin's codes", () => {

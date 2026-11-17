@@ -15,9 +15,13 @@ import { registerTools } from "./tools.js"
 
 type Registration = { dispose(): Promise<void> }
 
-/** Internal seam: the specs to register. The registry supplies them; tests may pass their own. */
+/** Internal seam: the specs to register, and which are model tools. The registry supplies them; tests may pass their own. */
 export interface BigQuerySeam {
   readonly specs: (options: ReturnType<typeof loadOptions>) => readonly ToolSpec[]
+  /** The model's tools among the specs; the rest are tools RPC methods only. */
+  readonly isModelTool: (spec: ToolSpec) => boolean
+  /** How many specs answer NOT_BUILT, for status. */
+  readonly notBuilt: number
 }
 
 export function createBigQueryPlugin(seam: BigQuerySeam) {
@@ -41,18 +45,19 @@ export function createBigQueryPlugin(seam: BigQuerySeam) {
       const specs = seam.specs(options)
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
-        keep(await registerTools(ctx, { access: options.access, specs, assert, report: report("tools") }))
+        const tools = specs.filter(seam.isModelTool)
+        keep(await registerTools(ctx, { access: options.access, specs: tools, assert, report: report("tools") }))
         keep(
           await registerStatus(ctx, {
             access: options.access,
             hostVersion: ctx.app.version,
             ...(hostWarning ? { hostWarning } : {}),
-            tools: () => ({ registered: specs.length, notBuilt: 0 }),
+            tools: () => ({ registered: tools.length, notBuilt: seam.notBuilt }),
             skills: SKILL_IDS.map((id) => ({ id, path: skillPath(id) })),
             problems: () => [...problems.values()],
           }),
         )
-        // Scripts call the read tools with no model, as a session and its agent.
+        // Scripts call the reads with no model, as a session and its agent: the read tools and the method-only reads.
         const stopTools = await registerToolsRpc(ctx as never, { plugin: PLUGIN, methods: scriptMethods(specs, assert) })
         keep({ dispose: stopTools })
         keep(await registerSkills(ctx))

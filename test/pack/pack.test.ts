@@ -38,7 +38,9 @@ run("git", ["init", "--quiet", work], root)
 afterAll(() => rmSync(work, { recursive: true, force: true }), { timeout: 120_000 })
 
 const MAX_FILES = 30
-const MAX_PACKED_BYTES = 150 * 1024
+// The server bundle carries zod, the source contract's tools RPC and google-auth-library (about 61 KB packed, for the
+// opt-in ADC mode). The whole package is 151 KB packed at Day 0, with the packages' code still to come.
+const MAX_PACKED_BYTES = 320 * 1024
 // The two self-contained entry bundles, and nothing else, in dist/.
 const DIST = ["dist/index.js", "dist/tui.js"]
 // Modules the host serves to plugins at runtime. Everything else must be inlined in the bundle.
@@ -197,6 +199,7 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       expect(output).toMatchObject({
         version: pkg.version,
         access: "all",
+        tools: { registered: 19, notBuilt: 19 },
         unguardedAgents: ["reviewer"],
         host: { version, range: SUPPORTED_HOST, tested: true },
       })
@@ -207,6 +210,15 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       const { output: described } = await host.api<{ output: { id: string; methods: { name: string }[] } }>("POST", `/api/rpc/${TOOLS_RPC_ID}/describe`, { input: {} })
       expect(described.id).toBe(TOOLS_RPC_ID)
       expect(described.methods.map((method) => method.name).sort()).toEqual([...RPC_METHOD_NAMES].sort())
+
+      // A script's call, as a session of the build agent: a read the default rules allow reaches the registry, which
+      // answers NOT_BUILT with no request off the machine; an uncapped-read plan is refused to a script.
+      const { data: session } = await host.api<{ data: { id: string } }>("POST", "/api/session", { title: "bigquery pack test", agent: "build", location: { directory: host.directory } })
+      const list = await host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/list`, { input: { sessionID: session.id, input: {} } })
+      expect(list.text).toContain("NOT_BUILT")
+      const uncapped = await host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/query`, { input: { sessionID: session.id, input: { planId: "plan_inventedinventedinvented1" } } })
+      expect(uncapped.text).toContain("PERMISSION_DENIED")
+      expect(uncapped.text).toContain("bigquery.uncapped_read")
 
       // The project's agents are exactly OpenCode's own and the one its config defines: nothing came from a folder
       // above the temp root.
@@ -301,7 +313,14 @@ async function serve(version: string, installed: string) {
     await exited
     clearTimeout(timer)
   }
-  return { api, until, close, log: () => log }
+  /** A call whose answer is returned whatever its status: a refusal is an answer here. */
+  const raw = async (method: string, path: string, body?: unknown): Promise<{ status: number; text: string }> => {
+    const url = new URL(path, `http://127.0.0.1:${port}`)
+    url.searchParams.set("location[directory]", directory)
+    const response = await fetch(url, { method, headers: { authorization, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) })
+    return { status: response.status, text: await response.text() }
+  }
+  return { api, raw, until, close, directory, log: () => log }
 }
 
 // The files a `files` entry should put in the tarball. dist/ must hold exactly the two bundles, so stale or foreign

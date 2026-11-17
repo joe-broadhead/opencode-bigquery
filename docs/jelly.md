@@ -9,8 +9,18 @@ tile, not Google's logo.
 
 ## Tools and permissions
 
-0 tools are declared (0 read-only). The tools are declared with the plugin's contract. A tool that is not declared
-still follows the access choice, as the block below says.
+21 tools are declared (14 read-only): the nineteen tools, and two reads that are tools RPC methods only, `bigquery.saved_list`
+(a source's set-up lists the saved queries with their SQL and estimates) and `bigquery.probe` (names the signed-in
+account for sources). Every action the plugin asserts is declared, and every read is `readOnly`, so at Read only every
+read runs, the scripts' and sources' reads included. A read left out of the list would be off at Read only.
+`test/unit/jelly.test.ts` keeps `jelly.tools` equal to the action table (`src/domain/actions.ts`), and checks each
+declared effect against the plugin's own default rules.
+
+One action is a run-time ask, `bigquery.uncapped_read` (`jelly.asks`): `bigquery_query({ planId })` asserts it before
+it runs a read the byte cap cannot bound, such as one over a table with row access policies or an external table. With
+Jelly's rules it runs without asking at Allowed, and asks at Ask before changes and at Read only, as the block below
+says. In local OpenCode the plugin's own default rules ask for it at `all` and `ask-changes` and deny it at
+`read-only`. A script cannot answer an ask, so the tools RPC refuses such a plan from a script.
 
 The family's shared rules, word for word from Jelly's guide:
 
@@ -35,7 +45,20 @@ Declared: `opencode-bigquery` and `opencode-bigquery-sql`.
 
 ## Views and scripts
 
-None: `jelly.views` and `jelly.rpc` are empty.
+`jelly.views` and `jelly.rpc` are empty. Scripts reach the reads through the tools RPC, `google-cloud.bigquery.tools`
+([Scripting](scripting.md)).
+
+## Sources
+
+The `sources` block declares two sources for Memory, `bigquery.jobs` (your finished jobs, free) and `bigquery.saved`
+(a saved query's result as a table, billed under a cap of 1 GiB per read), read through the tools RPC.
+
+## Signing in
+
+`jelly.signIns` declares one sign-in, `google-bigquery`, the plugin's own integration `bigquery-<alias>` with Jelly's
+`google` host client and its relay. Its scopes are every scope either level requests: `openid`, `userinfo.email`,
+`bigquery`, and `bigquery.insertdata`, the Read and write level's marker. The account's description carries the
+disclosure of what a Read token can do.
 
 ## Cost
 
