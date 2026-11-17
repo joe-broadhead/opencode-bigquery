@@ -116,7 +116,10 @@ export function readKey(stateDir: string, alias: string, keyId?: string): DpopKe
   return key
 }
 
-/** Deletes the key, and only that file. Sign-out and a new sign-in both go through here; Google's `/revoke` is never called. */
+/**
+ * Deletes the key, and only that file. Sign-out deletes it here; a new sign-in replaces it through `writeKey`'s rename,
+ * so the old record's `keyId` stops matching. Google's `/revoke` is never called.
+ */
 export function deleteKey(stateDir: string, alias: string): boolean {
   if (!ALIAS.test(alias)) return false
   const path = keyPath(stateDir, alias)

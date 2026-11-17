@@ -158,6 +158,31 @@ describe("the level, from the auth port", () => {
     expect(base.endpoint.tokenRequests).toEqual([])
   })
 
+  it("L-1: a failed refresh leaves no confirmed level; level refreshes again or refuses, never repeats write", async () => {
+    const base = writeSetup(WITH_MARKER)
+    expect(await base.port.level("work", signal)).toEqual({ level: "write" })
+    expect(base.endpoint.tokenRequests).toHaveLength(1)
+    authState(base.options, base.stateDir).tokens.delete("work")
+    base.endpoint.answer(() => ({ status: 400, body: { error: "invalid_grant" } }))
+    await expect(base.port.token("work", signal)).rejects.toMatchObject({ code: "AUTH_REQUIRED" })
+    await expect(base.port.level("work", signal)).rejects.toMatchObject({ code: "AUTH_REQUIRED" })
+    expect(base.endpoint.tokenRequests).toHaveLength(3)
+    // Restoring Google's answer confirms the level again; nothing stale was reported as write in between.
+    base.endpoint.answer(() => ({ status: 200, body: inventedTokenSet({ scope: WITH_MARKER.join(" ") }) }))
+    expect(await base.port.level("work", signal)).toEqual({ level: "write" })
+    expect(base.endpoint.tokenRequests).toHaveLength(4)
+  })
+
+  it("L-1: a later refresh that drops the marker makes level read at once", async () => {
+    const base = writeSetup(WITH_MARKER)
+    expect(await base.port.level("work", signal)).toEqual({ level: "write" })
+    authState(base.options, base.stateDir).tokens.delete("work")
+    base.endpoint.answer(() => ({ status: 200, body: inventedTokenSet({ scope: WITHOUT_MARKER.join(" ") }) }))
+    await base.port.token("work", signal)
+    expect(await base.port.level("work", signal)).toMatchObject({ level: "read", refusal: "WRITE_LEVEL_UNVERIFIED" })
+    expect(base.endpoint.tokenRequests).toHaveLength(2)
+  })
+
   it("makes a fresh refresh answer available to level when a token call already refreshed", async () => {
     const base = writeSetup(WITH_MARKER)
     expect((await base.port.token("work", signal)).scopes).toEqual(WITH_MARKER)

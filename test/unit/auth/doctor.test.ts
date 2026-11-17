@@ -59,10 +59,32 @@ describe("the doctor", () => {
 
   it("checks only the fence's concrete datasets when one is set", async () => {
     const big = bigquery({ table: "t1", permissions: [] })
-    await runDoctor({ options: options({ datasets: { allow: ["invented-proj.ds_two", "invented-proj.*"] } }), auth: scripts(), bigquery: big, signal })
+    await runDoctor({ options: options({ datasets: { allow: ["invented-proj.ds_two"] } }), auth: scripts(), bigquery: big, signal })
     const lists = big.calls.filter((call) => call.method === "listTables")
     expect(lists).toHaveLength(1)
     expect((lists[0]!.args[0] as { dataset: { datasetId: string } }).dataset.datasetId).toBe("ds_two")
+  })
+
+  it("L-3: matches a wildcard allow against the listed datasets", async () => {
+    const big = bigquery({ table: "t1", permissions: [], datasets: ["ds_one", "ds_two"] })
+    await runDoctor({ options: options({ datasets: { allow: ["invented-proj.*"] } }), auth: scripts(), bigquery: big, signal })
+    const ids = big.calls.filter((call) => call.method === "listTables").map((call) => (call.args[0] as { dataset: { datasetId: string } }).dataset.datasetId)
+    expect(ids).toEqual(["ds_one", "ds_two"])
+  })
+
+  it("L-3: never samples a dataset the fence denies, including a deny-only fence", async () => {
+    const big = bigquery({ table: "t1", permissions: [], datasets: ["ds_one"] })
+    const report = await runDoctor({ options: options({ datasets: { deny: ["invented-proj.ds_*"] } }), auth: scripts(), bigquery: big, signal })
+    expect(big.calls.filter((call) => call.method === "listTables")).toEqual([])
+    expect(report.text).toContain("no table was available")
+    expect(report.text).not.toContain("`invented-proj`.`ds_one`")
+    expect(report.status).toBe("OK")
+  })
+
+  it("L-3: a deny pattern removes a concretely allowed dataset before it is listed", async () => {
+    const big = bigquery({ table: "t1", permissions: [], datasets: ["ds_one"] })
+    await runDoctor({ options: options({ datasets: { allow: ["invented-proj.ds_one"], deny: ["*.ds_one"] } }), auth: scripts(), bigquery: big, signal })
+    expect(big.calls.filter((call) => call.method === "listTables")).toEqual([])
   })
 
   it("maps Google's refusals to the doctor's statuses, without its text", async () => {

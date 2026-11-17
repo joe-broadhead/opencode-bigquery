@@ -5,7 +5,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { createAuthPort, registerAuth } from "../../src/auth/index.js"
+import { createAuthPort, registerAuth, takePendingIamCheck } from "../../src/auth/index.js"
 import { DISCLOSURE, SCOPES } from "../../src/domain/levels.js"
 import { readKey } from "../../src/auth/keys.js"
 import { loadOptions } from "../../src/options.js"
@@ -155,6 +155,9 @@ describe("package A in a host", () => {
       const metadata = credential.metadata as { record: { level: string; acknowledged: boolean; binding: string; keyId: string; email?: string }; scopes: string[] }
       expect(metadata.record).toMatchObject({ level: "write", acknowledged: true, binding: "bound", email: "ada@example.invalid" })
       expect(metadata.scopes).toContain(SCOPES.writeMarker)
+      // A write sign-in sets no first-status IAM marker (review L-4).
+      expect(takePendingIamCheck(options, "default")).toBe(false)
+      expect(takePendingIamCheck(options, "default", metadata.record.keyId)).toBe(false)
 
       // The key is 0600 in a 0700 folder under the plugin's state folder, and holds no token.
       const keyPath = join(stateDir(), "keys", "default.jwk")
@@ -240,6 +243,10 @@ describe("package A in a host", () => {
       expect(readKey(stateDir(), "default", firstKey)).toBeUndefined()
       expect(readKey(stateDir(), "default", secondKey)?.keyId).toBe(secondKey)
       expect(fake.requests.every((request) => !request.path.includes("revoke"))).toBe(true)
+
+      // The Read sign-in leaves one IAM check for the first status; taking it once clears it (review L-4).
+      expect(takePendingIamCheck(options, "default", secondKey)).toBe(true)
+      expect(takePendingIamCheck(options, "default")).toBe(false)
 
       const port = createAuthPort({ options, fetch: fake.fetch, stateDir: stateDir() })
       expect(await port.level("default", new AbortController().signal)).toMatchObject({ level: "read", refusal: "ACCOUNT_READ_ONLY" })

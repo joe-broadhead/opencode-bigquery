@@ -57,6 +57,12 @@ export interface AuthState {
   readonly inflight: Map<string, Promise<CachedToken>>
   /** `DPoP-Nonce` by keyId, as Google last gave it. */
   readonly nonces: Map<string, string>
+  /**
+   * `alias|keyId` of each Read sign-in whose IAM check has not run yet (review L-4). Status takes it once, so
+   * `tables.testIamPermissions` runs at the first status after a Read sign-in, not inside the sign-in callback (the
+   * credential is not stored yet, and billingProject may be unset).
+   */
+  readonly iamPending: Set<string>
 }
 
 const states = new WeakMap<object, AuthState>()
@@ -65,7 +71,7 @@ const states = new WeakMap<object, AuthState>()
 export function authState(options: object, stateDir: string = stateDirOf()): AuthState {
   const found = states.get(options)
   if (found) return found
-  const state: AuthState = { stateDir, tokens: new Map(), refreshed: new Map(), rotated: new Map(), inflight: new Map(), nonces: new Map() }
+  const state: AuthState = { stateDir, tokens: new Map(), refreshed: new Map(), rotated: new Map(), inflight: new Map(), nonces: new Map(), iamPending: new Set() }
   states.set(options, state)
   return state
 }
@@ -87,6 +93,29 @@ export function forgetAlias(state: AuthState, alias: string): void {
   for (const key of [...state.refreshed.keys()]) if (key.startsWith(`${alias}|`)) state.refreshed.delete(key)
   for (const key of [...state.rotated.keys()]) if (key.startsWith(`${alias}|`)) state.rotated.delete(key)
   for (const key of [...state.inflight.keys()]) if (key.startsWith(`${alias}|`)) state.inflight.delete(key)
+  for (const key of [...state.iamPending]) if (key.startsWith(`${alias}|`)) state.iamPending.delete(key)
+}
+
+/**
+ * Takes the IAM check's pending marker for one sign-in (review L-4): true once, on the first status that sees it after a
+ * Read sign-in. F's status calls this and then `iamCheck`; a write sign-in sets none, and the on-demand checks
+ * (`bigquery_status({ include: ["iam"] })` and the doctor) do not consume it. With `keyId`, only that sign-in's marker
+ * counts; without it, the alias's pending marker is taken, which is what a tool handler that cannot read the credential's
+ * record uses.
+ */
+export function takePendingIamCheck(options: object, alias: string, keyId?: string): boolean {
+  const state = states.get(options)
+  if (!state) return false
+  if (keyId !== undefined) {
+    const key = answerKey(alias, keyId)
+    if (!state.iamPending.has(key)) return false
+    state.iamPending.delete(key)
+    return true
+  }
+  const key = [...state.iamPending].find((entry) => entry.startsWith(`${alias}|`))
+  if (!key) return false
+  state.iamPending.delete(key)
+  return true
 }
 
 /** The OAuth credential of one integration, or undefined when there is no active connection or it is not OAuth. */

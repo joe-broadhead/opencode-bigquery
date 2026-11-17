@@ -96,7 +96,7 @@ the refresh token to that key.
 - **Bound or not:** right after the code exchange the plugin makes one refresh **without** a proof. Google must answer
   400 for a bound token; a 200 means unbound. The sign-in records `bound` or `unbound`; the disclosure wording follows.
 - **Replacing a sign-in:** each sign-in writes a new key at the same path and replaces the credential, so a previous
-  bound refresh token can no longer mint tokens. OpenCode limits refresh tokens per client and account and retires the
+  bound refresh token can no longer mint tokens. Google limits refresh tokens per client and account and retires the
   oldest, so very frequent re-sign-ins on a client shared with other apps can retire an old token elsewhere.
 - **Never `/revoke`:** Google's revocation removes every scope the person granted the client's project, signing them out
   of every app on the same client, and no token can be revoked alone. Sign-out is local (see below).
@@ -138,10 +138,11 @@ Recommended IAM for read-only use: `roles/bigquery.jobUser` on the billing proje
 datasets, and nothing that includes `bigquery.tables.updateData`, `bigquery.tables.create` or `bigquery.tables.delete`
 (no `dataEditor`, `dataOwner`, basic Editor or Owner).
 
-After a sign-in, `/bigquery-doctor` (and `bigquery_status({ include: ["iam"] })`) calls `tables.testIamPermissions` for
-those three permissions on the first table of each fenced dataset, or with no fence on the first table of each dataset
-in the billing project, up to 10. It is free and accepts `bigquery`, and it reports inherited grants. A hit is
-`IDENTITY_CAN_WRITE`, naming the table and the permission.
+At the first status after each Read sign-in, and on `bigquery_status({ include: ["iam"] })` and `/bigquery-doctor`, the
+plugin calls `tables.testIamPermissions` for those three permissions on the first table of each allowed dataset (a
+fence's allow patterns, or with none the billing project's datasets), dropping every dataset a deny pattern matches and
+sampling at most 10. It is free and accepts `bigquery`, and it reports inherited grants. A hit is `IDENTITY_CAN_WRITE`,
+naming the table and the permission.
 
 The check's limit, stated with the warning: whether the identity may **create datasets at project level** cannot be
 checked, because Resource Manager's `projects.testIamPermissions` needs scopes this plugin does not request.
@@ -149,7 +150,7 @@ checked, because Resource Manager's `projects.testIamPermissions` needs scopes t
 ## `/bigquery-doctor` and `/bigquery-signout`
 
 - **`/bigquery-doctor`** runs one `projects.list`, one dry run of `SELECT 1`, one `datasets.list` on the billing project,
-  the level check above and the IAM check. It reports `OK`, `AUTH_REQUIRED`, `AUTH_SCOPE_MISSING`, `AUTH_CLIENT_REQUIRED`,
+  the level check above and the IAM check (without consuming the first-status marker). It reports `OK`, `AUTH_REQUIRED`, `AUTH_SCOPE_MISSING`, `AUTH_CLIENT_REQUIRED`,
   `ADC_REFUSED`, `ADC_UNAVAILABLE`, `WRITE_LEVEL_UNVERIFIED`, `WRITE_LEVEL_UNAVAILABLE`, `BILLING_PROJECT_REQUIRED`,
   `API_DISABLED`, `PERMISSION_DENIED` or `IDENTITY_CAN_WRITE`.
 - **`/bigquery-signout [alias]`** deletes the account's DPoP key and forgets its in-memory tokens. A bound refresh token

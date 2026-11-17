@@ -76,7 +76,12 @@ interface TokenRequest {
   readonly form: Readonly<Record<string, string>>
   /** Present for a DPoP proof; absent only for the deliberate proof-less binding probe. */
   readonly key?: DpopKey
-  readonly jti?: string
+  /**
+   * The proof's `jti`: a constant for the code exchange, whose value Google fixes, and a factory for a refresh, so every
+   * attempt — the `use_dpop_nonce` retry included — is a new request with its own unique `jti` (RFC 9449 §4.3, Google's
+   * desktop page).
+   */
+  readonly jti?: string | (() => string)
   readonly nonce?: string
   readonly fetch: typeof globalThis.fetch
   readonly signal?: AbortSignal
@@ -101,7 +106,8 @@ export async function requestToken(input: TokenRequest): Promise<TokenAnswer> {
   let nonce = input.nonce
   let retried = false
   for (;;) {
-    const proof = input.key && input.jti ? dpopProof(input.key, { jti: input.jti, now: input.now(), ...(nonce !== undefined ? { nonce } : {}) }) : undefined
+    const jti = typeof input.jti === "function" ? input.jti() : input.jti
+    const proof = input.key && jti ? dpopProof(input.key, { jti, now: input.now(), ...(nonce !== undefined ? { nonce } : {}) }) : undefined
     const body = new URLSearchParams(input.form).toString()
     let response: Response
     try {
@@ -189,7 +195,8 @@ export async function refreshAccessToken(input: {
       ...(input.client.clientSecret !== undefined ? { client_secret: input.client.clientSecret } : {}),
     },
     key: input.key,
-    jti: refreshJti(),
+    // A factory, not a value: the `use_dpop_nonce` retry is a second request and gets a fresh `jti` (review M-1).
+    jti: refreshJti,
     ...(input.nonce !== undefined ? { nonce: input.nonce } : {}),
     fetch: input.fetch,
     now: input.now,
@@ -202,7 +209,11 @@ export async function refreshAccessToken(input: {
 /**
  * The deliberate refresh **without** a proof right after the exchange (design §3.2, R3-M2): Google must answer 400 for
  * a refresh token it bound to the key; a 200 means the token is not device-bound, and the unbound disclosure applies.
- * Any other answer is treated as unbound, which can only overstate the risk, never understate it.
+ * Any other answer is treated as unbound, which can only overstate the risk, never understate it: a 400 carrying
+ * `invalid_grant`, `invalid_client` or `unauthorized_client` is an ordinary refusal, not proof of a device binding
+ * (Google's page: "Other failures might return invalid_grant").
+ *
+ * TODO(L16): record which error code Google's 400 carries for a bound token's missing proof; the live check settles it.
  */
 export async function probeBinding(input: {
   readonly refreshToken: string
@@ -224,7 +235,9 @@ export async function probeBinding(input: {
       now: input.now,
       ...(input.signal ? { signal: input.signal } : {}),
     })
-    return answer.status === 400 ? "bound" : "unbound"
+    if (answer.status !== 400) return "unbound"
+    const error = answer.failure?.error
+    return error === "invalid_grant" || error === "invalid_client" || error === "unauthorized_client" ? "unbound" : "bound"
   } catch (error) {
     if (error instanceof BigQueryError && error.code === "CANCELLED") throw error
     return "unbound"
@@ -482,7 +495,12 @@ export function classify(failure: TokenFailure, what: "exchange" | "refresh"): B
   return new BigQueryError("AUTH_REQUIRED", what === "refresh" ? "Google refused the refresh" : "Google refused the authorization code", "Run /connect and choose BigQuery to sign in again.")
 }
 
-/** `invalid_grant` with a reauthentication subtype, which is how a Workspace Cloud session limit answers (design §3.2, M8). */
+/**
+ * `invalid_grant` with a reauthentication subtype, which is how a Workspace Cloud session limit answers (design §3.2, M8).
+ *
+ * TODO(L1): confirm the exact subtype and description Google uses under a Cloud session limit, and that N is the hours
+ * it states; a live check under a test OU with a session limit settles both.
+ */
 function isReauthentication(failure: TokenFailure): boolean {
   const subtype = failure.subtype ?? ""
   const description = failure.description ?? ""

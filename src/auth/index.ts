@@ -175,6 +175,8 @@ class BigQueryAuth implements AuthPort {
           signal,
         })
         if (answer.nonce !== undefined) this.state.nonces.set(keyId, answer.nonce)
+        // TODO(L1): confirm whether a refresh answer ever carries a new refresh_token. If it does, the port must persist it
+        // through the host (the host callback below already does); this in-memory copy lasts only for this process.
         if (answer.tokens.refresh) this.state.rotated.set(id, answer.tokens.refresh)
         // Google's answer, even when it lists no scope: an empty list is a real answer, and cannot carry the marker.
         this.state.refreshed.set(id, answer.tokens.scopes ?? [])
@@ -184,7 +186,10 @@ class BigQueryAuth implements AuthPort {
         this.state.tokens.set(alias, refreshed)
         return refreshed
       } catch (error) {
+        // A failed refresh leaves no confirmed answer (review L-1): level() must refresh again or refuse, never repeat
+        // the last successful scope list as if it were current.
         this.state.tokens.delete(alias)
+        this.state.refreshed.delete(id)
         if (error instanceof BigQueryError && error.code === "AUTH_REQUIRED") {
           const host = this.state.host
           if (host) await reportNeedsSignIn(host, integrationIdFor(alias), connection, error.detail)
@@ -335,7 +340,9 @@ interface AuthContext {
   readonly session: { synthetic(input: { readonly sessionID: string; readonly delivery: "steer" | "queue"; readonly text: string; readonly description: string; readonly resume: boolean }): Promise<void> }
 }
 
-export interface AuthRegistrationEnv extends AuthEnv {
+export interface AuthRegistrationEnv extends Omit<AuthEnv, "fetch"> {
+  /** `src/plugin.ts` passes `globalThis.fetch`; a test may pass its fake. Omitted, the runtime's own is used. */
+  readonly fetch?: typeof globalThis.fetch
   /** A test's port, already built; production builds one from the options. */
   readonly auth?: AuthPort
   readonly bigquery?: BigQueryPort
@@ -379,7 +386,7 @@ export async function registerAuth(ctx: unknown, env: AuthRegistrationEnv): Prom
       registrations.push(
         await context.integration.transform((draft) => {
           for (const [alias, settings] of interactive) {
-            const definition = integrationFor({ options, alias, settings, state, host, fetch, now, name: names.get(alias) ?? DISPLAY_NAME, auth: env })
+            const definition = integrationFor({ options, alias, settings, state, host, fetch, now, name: names.get(alias) ?? DISPLAY_NAME })
             draft.update(definition.integrationID, (integration) => {
               integration.name = definition.name
             })
@@ -433,7 +440,6 @@ function integrationFor(input: {
   readonly fetch: typeof globalThis.fetch
   readonly now: () => number
   readonly name: string
-  readonly auth: AuthEnv
 }): { integrationID: string; name: string; registration: MethodRegistration } {
   const { alias, settings, host, fetch, now, name } = input
   const accountClient = clientFromOption(settings.oauthClient)
@@ -482,6 +488,9 @@ function completeSignIn(input: { readonly alias: string; readonly level: Level; 
   if (input.result.nonce !== undefined) input.state.nonces.set(input.result.key.keyId, input.result.nonce)
   if (input.previousKeyId && input.previousKeyId !== input.result.key.keyId) input.state.nonces.delete(input.previousKeyId)
   forgetAlias(input.state, input.alias)
+  // Review L-4: the first status after a Read sign-in runs the IAM check; the sign-in callback cannot (no stored
+  // credential yet, and billingProject may be unset).
+  if (input.level === "read") input.state.iamPending.add(answerKey(input.alias, input.result.key.keyId))
   const identity = input.result.tokens.idToken ? idTokenIdentity(input.result.tokens.idToken, { clientId: input.client.client.clientId, now: input.now() }) : undefined
   const record: SignInRecord = {
     version: 1,
@@ -520,14 +529,22 @@ async function refreshSignIn(input: { readonly alias: string; readonly name: str
   if (!refreshToken) {
     throw new BigQueryError("AUTH_REQUIRED", `The Google sign-in for ${input.alias} has no refresh token`, `Run /connect and choose ${input.name} to sign in again.`)
   }
-  const answer = await refreshAccessToken({
-    refreshToken,
-    client: signInClient(stored).client,
-    key,
-    ...(input.state.nonces.get(stored.record.keyId) !== undefined ? { nonce: input.state.nonces.get(stored.record.keyId) } : {}),
-    fetch: input.fetch,
-    now: input.now,
-  })
+  let answer: Awaited<ReturnType<typeof refreshAccessToken>>
+  try {
+    answer = await refreshAccessToken({
+      refreshToken,
+      client: signInClient(stored).client,
+      key,
+      ...(input.state.nonces.get(stored.record.keyId) !== undefined ? { nonce: input.state.nonces.get(stored.record.keyId) } : {}),
+      fetch: input.fetch,
+      now: input.now,
+    })
+  } catch (error) {
+    // A failed refresh leaves no confirmed answer (review L-1), here as on the port's path.
+    input.state.tokens.delete(input.alias)
+    input.state.refreshed.delete(id)
+    throw error
+  }
   if (answer.nonce !== undefined) input.state.nonces.set(stored.record.keyId, answer.nonce)
   if (answer.tokens.refresh) input.state.rotated.set(id, answer.tokens.refresh)
   input.state.refreshed.set(id, answer.tokens.scopes ?? [])
@@ -577,3 +594,6 @@ function stopped(signal: AbortSignal): void {
 
 /** The names a host may show; exported so tests assert the form and URL without importing the form module twice. */
 export { integrationIdFor, integrationNames }
+
+/** F's status takes a Read sign-in's pending IAM check once (review L-4). */
+export { takePendingIamCheck } from "./state.js"

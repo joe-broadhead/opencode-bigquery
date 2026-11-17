@@ -161,6 +161,48 @@ describe("DPoP nonces", () => {
     expect(refreshProofs.map((proof) => proof.payload["nonce"])).toContain("nonce-one")
     expect(refreshProofs.map((proof) => proof.payload["nonce"])).toContain("nonce-two")
     expect(refreshProofs.every((proof) => proof.payload["jti"] !== codeHash(CODE))).toBe(true)
+    // M-1: the use_dpop_nonce retry is a second request; its proof has its own unique jti.
+    expect(new Set(refreshProofs.map((proof) => proof.payload["jti"])).size).toBe(refreshProofs.length)
+  })
+})
+
+describe("the nonce retry's proof", () => {
+  it("L16: a refresh retried after use_dpop_nonce is a new request with a new jti and iat", async () => {
+    let attempts = 0
+    let time = NOW
+    const now = () => (time += 1000)
+    const endpoint = new FakeTokenEndpoint().answer(() => {
+      attempts += 1
+      if (attempts === 1) return { status: 400, body: { error: "use_dpop_nonce" }, headers: { "DPoP-Nonce": "nonce-second" } }
+      return { status: 200, body: inventedTokenSet() }
+    })
+    await refreshAccessToken({ refreshToken: "1//r", client: CLIENT, key: generateKey(), fetch: endpoint.fetch, now })
+    const proofs = endpoint.proofs
+    expect(proofs).toHaveLength(2)
+    expect(proofs[0]!.payload["jti"]).not.toBe(proofs[1]!.payload["jti"])
+    expect(proofs[1]!.payload["iat"] as number).toBeGreaterThan(proofs[0]!.payload["iat"] as number)
+    expect(proofs[0]!.payload).not.toHaveProperty("nonce")
+    expect(proofs[1]!.payload["nonce"]).toBe("nonce-second")
+  })
+
+  it("L16: a code exchange retried for a nonce keeps the code's jti", async () => {
+    let exchanges = 0
+    const endpoint = new FakeTokenEndpoint().answer((request) => {
+      if (request.form["grant_type"] === "authorization_code") {
+        exchanges += 1
+        if (exchanges === 1) return { status: 400, body: { error: "use_dpop_nonce" }, headers: { "DPoP-Nonce": "nonce-exchange" } }
+        return { status: 200, body: inventedTokenSet() }
+      }
+      if (!request.headers["dpop"]) return { status: 400, body: { error: "invalid_request" } }
+      return { status: 200, body: inventedTokenSet() }
+    })
+    const signedIn = await startSignIn({ level: "read", endpoint })
+    await signedIn.callback()
+    await signedIn.authorization.callback
+    const exchangeProofs = endpoint.proofs.filter((proof) => proof.request.form["grant_type"] === "authorization_code")
+    expect(exchangeProofs).toHaveLength(2)
+    for (const proof of exchangeProofs) expect(proof.payload["jti"]).toBe(codeHash(CODE))
+    expect(exchangeProofs[1]!.payload["nonce"]).toBe("nonce-exchange")
   })
 })
 
@@ -211,11 +253,16 @@ describe("refreshes and refusals", () => {
     }
   })
 
-  it("probes the device binding with no proof at all", async () => {
+  it("probes the device binding with no proof at all, and counts only the missing-proof 400 as bound", async () => {
     const bound = new FakeTokenEndpoint().answer(() => ({ status: 400, body: { error: "invalid_request" } }))
     expect(await probeBinding({ refreshToken: "1//r", client: CLIENT, fetch: bound.fetch, now })).toBe("bound")
     const unbound = new FakeTokenEndpoint().answer(() => ({ status: 200, body: inventedTokenSet() }))
     expect(await probeBinding({ refreshToken: "1//r", client: CLIENT, fetch: unbound.fetch, now })).toBe("unbound")
+    // Review L-2: an ordinary refusal is not proof of a binding; the conservative answer is unbound.
+    for (const error of ["invalid_grant", "invalid_client", "unauthorized_client"]) {
+      const ordinary = new FakeTokenEndpoint().answer(() => ({ status: 400, body: { error } }))
+      expect(await probeBinding({ refreshToken: "1//r", client: CLIENT, fetch: ordinary.fetch, now }), error).toBe("unbound")
+    }
     for (const endpoint of [bound, unbound]) expect(endpoint.proofs).toEqual([])
   })
 

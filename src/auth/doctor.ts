@@ -205,22 +205,19 @@ export async function iamCheck(input: {
   readonly datasets?: readonly { readonly projectId: string; readonly datasetId: string }[]
 }): Promise<IamReport> {
   const settings = input.options.accounts?.[input.alias]
-  const fenced = fencedDatasets(settings?.datasets)
-  let targets: readonly { projectId: string; datasetId: string }[]
+  const fence = settings?.datasets
+  const allow = fence?.allow ?? []
+  let datasets = input.datasets
   let problem: string | undefined
-  if (fenced.length > 0) {
-    targets = fenced.slice(0, 10)
-  } else {
-    let datasets = input.datasets
-    if (!datasets) {
-      try {
-        datasets = (await input.bigquery.listDatasets({ account: input.alias, project: input.billingProject, maxResults: 10 }, input.signal)).items.map((item) => ({ projectId: item.ref.projectId, datasetId: item.ref.datasetId }))
-      } catch (error) {
-        return { status: statusOf(error), canWrite: [], checked: 0, problem: detailOf(error), limit: LIMIT }
-      }
+  // A wildcard allow, or no allow at all, is matched against what the project lists; a concrete allow names its dataset.
+  if (!datasets && (allow.length === 0 || allow.some((pattern) => pattern.includes("*")))) {
+    try {
+      datasets = (await input.bigquery.listDatasets({ account: input.alias, project: input.billingProject, maxResults: 10 }, input.signal)).items.map((item) => ({ projectId: item.ref.projectId, datasetId: item.ref.datasetId }))
+    } catch (error) {
+      return { status: statusOf(error), canWrite: [], checked: 0, problem: detailOf(error), limit: LIMIT }
     }
-    targets = datasets.slice(0, 10)
   }
+  const targets = iamTargets(datasets ?? [], fence)
   const canWrite: { table: TableReference; permissions: readonly string[] }[] = []
   let checked = 0
   for (const dataset of targets) {
@@ -248,7 +245,7 @@ export async function iamCheck(input: {
 function iamLines(report: IamReport): string[] {
   const lines: string[] = []
   if (report.checked === 0) {
-    lines.push("IAM: no table was available to check; create a table or set the datasets fence to one that has tables.")
+    lines.push("IAM: no table was available to check; the fence excludes every sampled dataset, or the sampled datasets have no tables.")
   } else {
     lines.push(`IAM: tables.testIamPermissions answered for ${report.checked} table${report.checked === 1 ? "" : "s"}.`)
   }
@@ -262,23 +259,60 @@ function iamLines(report: IamReport): string[] {
   return lines
 }
 
+interface DatasetRef {
+  readonly projectId: string
+  readonly datasetId: string
+}
+
 /**
- * The concrete `project.dataset` entries of the fence's allow list, in order, without wildcards. A deny-only fence has
- * no dataset to sample: the check then samples the billing project, rather than probing a dataset the person excluded.
+ * The datasets the IAM check may sample, up to 10 (review L-3). Every allow pattern contributes its concrete dataset, or
+ * the listed datasets it matches when it has a wildcard; with no allow list the billing project's datasets are sampled.
+ * A dataset any deny pattern matches is dropped before anything is listed, so the check never names a fenced-out
+ * dataset. Deny wins, as §14.1 says.
  */
-function fencedDatasets(fence: { readonly allow?: readonly string[]; readonly deny?: readonly string[] } | undefined): readonly { projectId: string; datasetId: string }[] {
-  const patterns = [...(fence?.allow ?? [])]
-  const seen = new Set<string>()
-  const out: { projectId: string; datasetId: string }[] = []
-  for (const pattern of patterns) {
-    const match = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(pattern)
-    if (!match) continue
-    const key = `${match[1]}.${match[2]}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push({ projectId: match[1]!, datasetId: match[2]! })
+function iamTargets(datasets: readonly DatasetRef[], fence: { readonly allow?: readonly string[]; readonly deny?: readonly string[] } | undefined): readonly DatasetRef[] {
+  const allow = fence?.allow ?? []
+  const deny = fence?.deny ?? []
+  const candidates: DatasetRef[] = []
+  if (allow.length === 0) candidates.push(...datasets)
+  else {
+    for (const pattern of allow) {
+      const exact = concreteDataset(pattern)
+      if (exact) candidates.push(exact)
+      else for (const dataset of datasets) if (matchesDataset(pattern, dataset)) candidates.push(dataset)
+    }
   }
-  return out
+  const unique = candidates.filter((candidate, index) => candidates.findIndex((other) => sameDataset(other, candidate)) === index)
+  return unique.filter((dataset) => !deny.some((pattern) => matchesDataset(pattern, dataset))).slice(0, 10)
+}
+
+function sameDataset(left: DatasetRef, right: DatasetRef): boolean {
+  return left.projectId === right.projectId && left.datasetId === right.datasetId
+}
+
+/** `proj.dataset` without a wildcard; the dataset follows the last dot, so a domain-scoped project id keeps its dots. */
+function concreteDataset(pattern: string): DatasetRef | undefined {
+  if (pattern.includes("*")) return undefined
+  const dot = pattern.lastIndexOf(".")
+  if (dot <= 0 || dot === pattern.length - 1) return undefined
+  return { projectId: pattern.slice(0, dot), datasetId: pattern.slice(dot + 1) }
+}
+
+/** The fence's pattern language: `proj.dataset`, `proj.*`, `*.sales_*`; case-sensitive, like the fence. */
+function matchesDataset(pattern: string, dataset: DatasetRef): boolean {
+  const dot = pattern.lastIndexOf(".")
+  if (dot <= 0 || dot === pattern.length - 1) return false
+  return wildcard(pattern.slice(0, dot), dataset.projectId) && wildcard(pattern.slice(dot + 1), dataset.datasetId)
+}
+
+function wildcard(pattern: string, value: string): boolean {
+  if (pattern === "*") return true
+  if (!pattern.includes("*")) return pattern === value
+  const source = pattern
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*")
+  return new RegExp(`^${source}$`).test(value)
 }
 
 function statusFromProblem(problem: string): DoctorStatus {
