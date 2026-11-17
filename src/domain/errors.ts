@@ -218,7 +218,7 @@ export const ErrorCode = {
   NEEDS_PLAN: {
     meaning:
       "A read whose cost the cap cannot bound, that has external effects, or whose references could not be resolved; the reason is CAP_NOT_ENFORCEABLE, EXTERNAL_EFFECTS or UNRESOLVED_REFERENCE.",
-    next: "Call bigquery_plan({ sql }) and show the preview; then bigquery_query({ planId }) for CAP_NOT_ENFORCEABLE, or the commit tool named for the others.",
+    next: "Call bigquery_plan({ sql }) and show the user the preview; with their go-ahead, bigquery_query({ planId }) for CAP_NOT_ENFORCEABLE, or the commit tool named for the others.",
     state: "refused",
     owner: "C",
   },

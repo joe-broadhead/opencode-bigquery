@@ -124,7 +124,7 @@ export const ACTIONS: readonly ActionEntry[] = [
   }),
 ]
 
-/** The run-time asks: actions a tool asserts that a person should be asked about. Declared in jelly `asks`. */
+/** The run-time asks: actions a tool asserts at run time, declared in jelly `asks`. Whether one asks is the rules'. */
 export const ASKS = {
   /** `bigquery_query({ planId })` asserts it before running a read the byte cap cannot bound. */
   uncappedRead: `${NAMESPACE}.uncapped_read`,

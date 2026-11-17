@@ -5,7 +5,7 @@
  * expired plan stays until its time limit, so a second commit hears that it was used, not that it never existed.
  *
  * Routing: a plan's category names the one tool that commits it (`COMMIT_TOOL`): `uncapped-read` plans run through
- * `bigquery_query({ planId })` after the `bigquery.uncapped_read` ask; every other category has its own commit tool.
+ * `bigquery_query({ planId })`, which asserts `bigquery.uncapped_read`; every other category has its own commit tool.
  */
 import { randomBytes } from "node:crypto"
 import { type Category, COMMIT_TOOL } from "./actions.js"

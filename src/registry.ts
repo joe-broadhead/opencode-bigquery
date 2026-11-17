@@ -8,8 +8,8 @@
  *   handler, with the plan's preview as metadata, so the person is asked once (D builds that);
  * - the ports the handler gets refuse any request before the tool's own action was asserted, so no tool can reach
  *   Google first, and `call.assert` refuses an action the table does not declare (asserted = declared);
- * - `bigquery_query({ planId })` from a script is refused: an uncapped-read plan needs a person to answer
- *   `bigquery.uncapped_read`, which a script cannot (`PERMISSION_DENIED`);
+ * - `bigquery_query({ planId })` from a script is refused: an uncapped-read plan (`bigquery.uncapped_read`) runs only
+ *   from a session's tool, where the user can see its preview and be asked, never from a script (`PERMISSION_DENIED`);
  * - a `BigQueryError` becomes the result envelope on the model path, and the tools RPC's failure on a script's path.
  */
 import type * as z from "zod"
@@ -128,7 +128,7 @@ function specOf(entry: ActionEntry, options: Options, ports: Ports, aliases: rea
         if (entry.name === "query" && call.via === "rpc" && record.planId !== undefined) {
           throw new BigQueryError(
             "PERMISSION_DENIED",
-            `An uncapped-read plan runs only after a person answers ${ASKS.uncappedRead}, which a script cannot`,
+            `An uncapped-read plan (${ASKS.uncappedRead}) runs only from a session's tool, where the user sees its preview, never from a script`,
             "Run the plan from a session with bigquery_query({ planId }), or change the query so the byte cap bounds it.",
           )
         }

@@ -98,7 +98,7 @@ export const OptionsSchema = z
     uncappedTimeoutSeconds: z.number().int().min(1).max(21_600).default(120),
     maxConcurrentJobs: z.number().int().min(1).max(32).default(4),
     scripts: z.boolean().default(true),
-    /** `ask`: a read the cap cannot bound runs from a plan after the person answers `bigquery.uncapped_read`. */
+    /** `ask`: a read the cap cannot bound may run from a plan, asserting `bigquery.uncapped_read` (whether that asks is the rules'). */
     uncappedReads: z.enum(["ask", "refuse"]).default("ask"),
     policyTagged: z.enum(["withhold", "allow"]).default("withhold"),
     savedQueries: z.record(z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), SavedQuerySchema).default({}),

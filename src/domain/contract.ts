@@ -39,6 +39,12 @@ export const params = z
   .describe("Query parameters: an object for @name parameters, an array for ? parameters")
 export const planId = z.string().regex(/^plan_[A-Za-z0-9_-]{16,64}$/)
 
+/**
+ * What the model reads about running an uncapped-read plan. Under Jelly's Allowed the run-time ask is not shown (D165),
+ * so the absence of a prompt is never the user's consent: the model gets the go-ahead in the conversation first.
+ */
+export const UNCAPPED_PLAN_ID = "Run an uncapped-read plan instead of sql. The user may not be asked first (Jelly's Allowed): get the user's go-ahead in the conversation before you run it."
+
 export const STATES = ["done", "running", "refused", "failed", "cancelled"] as const
 
 export const GoogleErrorSchema = z.strictObject({
@@ -179,7 +185,7 @@ export const QueryInput = z
     maxRows: z.number().int().min(1).max(500).optional().describe("Rows inline; 50 by default"),
     wait: z.number().int().min(0).max(240).optional().describe("Seconds to wait for the job; 30 by default"),
     useCache: z.boolean().optional(),
-    planId: planId.optional().describe("Run an uncapped-read plan instead of sql; you are asked first"),
+    planId: planId.optional().describe(UNCAPPED_PLAN_ID),
   })
   .refine((input) => (input.planId === undefined) !== (input.sql === undefined), { message: "pass sql, or planId alone" })
   .refine((input) => input.planId === undefined || Object.keys(input).every((key) => key === "planId" || key === "account"), {
@@ -364,7 +370,7 @@ export const SCHEMAS = {
   table: { input: TableInput, output: TableOutput, description: "A table's schema, partitioning, clustering, size and view SQL; an optional small sample. Free unless partitions." },
   search: { input: SearchInput, output: SearchOutput, description: "Find tables and columns by name or description. Billed at least 10 MB per view read." },
   estimate: { input: EstimateInput, output: EstimateOutput, description: "Dry-run SQL: type, referenced objects, bytes, cost, and whether the byte cap bounds it. Free." },
-  query: { input: QueryInput, output: QueryOutput, description: "Run a read under a byte cap, after a dry run; or run an uncapped-read plan by planId. Billed." },
+  query: { input: QueryInput, output: QueryOutput, description: "Run a read under a byte cap, after a dry run; or, with the user's go-ahead, run an uncapped-read plan by planId. Billed." },
   job: { input: JobInput, output: JobOutput, description: "One job's state, bytes and errors, and a page of its results. Free." },
   jobs: { input: JobsInput, output: JobsOutput, description: "This account's recent jobs. Free." },
   profile: { input: ProfileInput, output: ProfileOutput, description: "One aggregate query that profiles a table or a SELECT. Billed, capped." },

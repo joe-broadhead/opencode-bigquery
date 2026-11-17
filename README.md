@@ -88,7 +88,7 @@ Every code the plugin raises, with its next step. `/bigquery-status` shows the p
 | `JOB_TIMEOUT` | The job reached its time limit; the bytes billed so far are given. | Narrow the query, or pass a longer jobTimeoutSeconds. |
 | `LEGACY_SQL_REFUSED` | The query is legacy SQL, which the plugin never runs. | Rewrite it in GoogleSQL. |
 | `LOCATION_MISMATCH` | The query references objects in different locations. | Query one location at a time, and pass location. |
-| `NEEDS_PLAN` | A read whose cost the cap cannot bound, that has external effects, or whose references could not be resolved; the reason is CAP_NOT_ENFORCEABLE, EXTERNAL_EFFECTS or UNRESOLVED_REFERENCE. | Call bigquery_plan({ sql }) and show the preview; then bigquery_query({ planId }) for CAP_NOT_ENFORCEABLE, or the commit tool named for the others. |
+| `NEEDS_PLAN` | A read whose cost the cap cannot bound, that has external effects, or whose references could not be resolved; the reason is CAP_NOT_ENFORCEABLE, EXTERNAL_EFFECTS or UNRESOLVED_REFERENCE. | Call bigquery_plan({ sql }) and show the user the preview; with their go-ahead, bigquery_query({ planId }) for CAP_NOT_ENFORCEABLE, or the commit tool named for the others. |
 | `NOT_BUILT` | This tool is declared but not built yet in this version of the plugin; nothing was sent to Google. | Use another tool, or update the plugin. |
 | `NOT_FOUND` | The project, dataset, table, routine or job was not found. | Find the exact name with bigquery_list or bigquery_search. |
 | `OPTIONS_INVALID` | The plugin options are not valid: an unknown key, a wrong type, a value out of range, a write level on a headless account, or a secret where none belongs. | Fix the plugin options in opencode.json; the message names the option. |

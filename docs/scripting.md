@@ -19,8 +19,8 @@ Only the read tools are methods; a change runs only from the model's tool, after
 | `saved_list`, `probe` | read | The `bigquery.saved` source's set-up list, and the sources' identity probe. Methods only. |
 
 Each method's action is `bigquery.<name>`, resolved on `<account>:<operation>` before it runs. `query` with a `planId`
-is refused to a script (`PERMISSION_DENIED`): a read the byte cap cannot bound runs only after a person answers
-`bigquery.uncapped_read`, which a script cannot. Every tool answers `NOT_BUILT` until it is built.
+is refused to a script (`PERMISSION_DENIED`): a read the byte cap cannot bound (`bigquery.uncapped_read`) runs only
+from a session's tool, where the user sees its preview, never from a script. Every tool answers `NOT_BUILT` until it is built.
 
 ## A script runs as a session
 

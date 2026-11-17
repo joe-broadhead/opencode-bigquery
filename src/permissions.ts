@@ -19,8 +19,9 @@ export function changeEffect(access: Access): Effect {
 }
 
 /**
- * What a read the byte cap cannot bound gets: asked at `all` and `ask-changes`, denied at `read-only` (design §5.2,
- * Q13). A person answers it each time; only a rule of their own allows it outright.
+ * What a read the byte cap cannot bound gets from the plugin's own rules in local OpenCode: asked at `all` and
+ * `ask-changes`, denied at `read-only` (design §5.2, Q13). Jelly writes its own rules: there Allowed runs it without
+ * asking (D165), and Ask before changes and Read only ask.
  */
 export function uncappedReadEffect(access: Access): Effect {
   return access === "read-only" ? "deny" : "ask"
