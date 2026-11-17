@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { ACCESS_VALUES } from "../../src/constants.js"
+import { ACTIONS, ASKS } from "../../src/domain/actions.js"
 import { changeEffect, defaultRules, effectOf, insertDefaults, registerPermissionDefaults, type Rule, unguardedAgents } from "../../src/permissions.js"
 
 const BASE: Rule = { action: "*", resource: "*", effect: "allow" }
@@ -9,15 +10,32 @@ describe("default rules", () => {
     expect(ACCESS_VALUES.map(changeEffect)).toEqual(["allow", "ask", "deny"])
   })
 
+  it("allow every read at every access, so reads run at Read only", () => {
+    for (const access of ACCESS_VALUES) {
+      const rules = [BASE, ...defaultRules(access)]
+      for (const entry of ACTIONS.filter((item) => item.readOnly)) expect(effectOf(rules, entry.action), `${access} ${entry.name}`).toBe("allow")
+    }
+  })
+
+  it("give the five commits, save and cancel the change effect", () => {
+    const changes = ACTIONS.filter((item) => !item.readOnly).map((item) => item.name)
+    expect(changes).toEqual(["save", "cancel", "write", "export", "share", "delete", "admin"])
+    for (const access of ACCESS_VALUES) {
+      const rules = [BASE, ...defaultRules(access)]
+      for (const name of changes) expect(effectOf(rules, `bigquery.${name}`), `${access} ${name}`).toBe(changeEffect(access))
+    }
+  })
+
+  it("ask for an uncapped read at all and ask-changes, and deny it at read-only", () => {
+    expect(ACCESS_VALUES.map((access) => effectOf([BASE, ...defaultRules(access)], ASKS.uncappedRead))).toEqual(["ask", "ask", "deny"])
+  })
+
   it("treat an action the plugin does not declare like a change, at every access", () => {
     for (const access of ACCESS_VALUES) expect(effectOf([BASE, ...defaultRules(access)], "bigquery.never_seen"), access).toBe(changeEffect(access))
   })
 
-  it("start with the broad bigquery.* rule, so the narrow rules after it win", () => {
+  it("start with the broad bigquery.* rule, and leave other plugins' tools alone", () => {
     for (const access of ACCESS_VALUES) expect(defaultRules(access)[0]).toEqual({ action: "bigquery.*", resource: "*", effect: changeEffect(access) })
-  })
-
-  it("leave other plugins' tools alone", () => {
     expect(defaultRules("read-only").every((rule) => rule.action.startsWith("bigquery."))).toBe(true)
   })
 })

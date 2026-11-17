@@ -1,8 +1,9 @@
 // Default permission rules for BigQuery's tools, inserted into each agent right after its base `* * allow` rule.
 // OpenCode applies the last matching rule, so the agent's own stricter rules (Plan, Explore), the user's `permissions`
-// rules and saved approvals all still win. The `access` option generates the block.
+// rules and saved approvals all still win. The `access` option generates the block from the action table.
 import type { Plugin } from "@opencode/plugin"
 import { type Access, NAMESPACE } from "./constants.js"
+import { ASKS, CHANGE_ACTIONS, READ_ACTIONS } from "./domain/actions.js"
 import { errorText } from "./domain/errors.js"
 import { reasonOf } from "./redact.js"
 
@@ -18,11 +19,27 @@ export function changeEffect(access: Access): Effect {
 }
 
 /**
- * Broad first, narrow last, because the last matching rule wins. The namespace rule gives every action the change
- * effect, so an action the plugin has not declared is treated like a change. TODO(Day 0): one rule per declared action.
+ * What a read the byte cap cannot bound gets from the plugin's own rules in local OpenCode: asked at `all` and
+ * `ask-changes`, denied at `read-only` (design §5.2, Q13). Jelly writes its own rules: there Allowed runs it without
+ * asking (D165), and Ask before changes and Read only ask.
+ */
+export function uncappedReadEffect(access: Access): Effect {
+  return access === "read-only" ? "deny" : "ask"
+}
+
+/**
+ * Broad first, narrow last, because the last matching rule wins: `bigquery.*` at the change effect, so an action the
+ * plugin does not declare is treated like a change; every read allowed; every change at the change effect; and the
+ * run-time ask `bigquery.uncapped_read`. All from the one action table (src/domain/actions.ts).
  */
 export function defaultRules(access: Access = "all"): Rule[] {
-  return [{ action: NAMESPACE_ACTION, resource: "*", effect: changeEffect(access) }]
+  const change = changeEffect(access)
+  return [
+    { action: NAMESPACE_ACTION, resource: "*", effect: change },
+    ...READ_ACTIONS.map((entry): Rule => ({ action: entry.action, resource: "*", effect: "allow" })),
+    ...CHANGE_ACTIONS.map((entry): Rule => ({ action: entry.action, resource: "*", effect: change })),
+    { action: ASKS.uncappedRead, resource: "*", effect: uncappedReadEffect(access) },
+  ]
 }
 
 const isBaseAllow = (item: Rule) => item.action === "*" && item.resource === "*" && item.effect === "allow"

@@ -67,6 +67,7 @@
     "@we-the-rebel-alliance/source-contract": "github:we-the-rebel-alliance/source-contract#v0.2.0",
     "babel-preset-solid": "1.9.16",
     "esbuild": "0.28.2",
+    "google-auth-library": "11.3.4",
     "solid-js": "1.9.18",
     "typescript": "5.9.3",
     "vitest": "5.0.5",
@@ -109,14 +110,187 @@
     "icon": "assets/icon.svg",
     "cost": "Google bills queries to your billing project: on demand about $6.25 per TiB scanned, first TiB a month free. Each query is estimated and capped (10 GiB unless raised); AI/ML functions, Python UDFs and remote functions bill outside that cap and need a plan. Results say what was billed.",
     "admin": "grant you BigQuery Job User on a billing project and Data Viewer on the datasets you read, and allow this OAuth client if your organisation restricts Google sign-ins",
-    "tools": [],
+    "tools": [
+      {
+        "name": "bigquery.status",
+        "permission": "bigquery.status",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.list",
+        "permission": "bigquery.list",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.table",
+        "permission": "bigquery.table",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.search",
+        "permission": "bigquery.search",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.estimate",
+        "permission": "bigquery.estimate",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.query",
+        "permission": "bigquery.query",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "Runs SELECT and ASSERT under a byte cap. One the cap cannot bound runs from a plan: under Allowed without asking, limited to 120 seconds and your budget if set; otherwise you are asked first"
+      },
+      {
+        "name": "bigquery.job",
+        "permission": "bigquery.job",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.jobs",
+        "permission": "bigquery.jobs",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.profile",
+        "permission": "bigquery.profile",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.plan",
+        "permission": "bigquery.plan",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "Dry-runs a change and returns a preview and a single-use plan; changes nothing"
+      },
+      {
+        "name": "bigquery.events_list",
+        "permission": "bigquery.events_list",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.saved_read",
+        "permission": "bigquery.saved_read",
+        "effect": "allow",
+        "readOnly": true
+      },
+      {
+        "name": "bigquery.save",
+        "permission": "bigquery.save",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Writes a finished query's results to a local file"
+      },
+      {
+        "name": "bigquery.cancel",
+        "permission": "bigquery.cancel",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "bigquery.write",
+        "permission": "bigquery.write",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "bigquery.export",
+        "permission": "bigquery.export",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "bigquery.share",
+        "permission": "bigquery.share",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "bigquery.delete",
+        "permission": "bigquery.delete",
+        "effect": "allow",
+        "readOnly": false,
+        "note": "Commits a delete plan: deletes rows, tables or datasets, replaces objects, runs scripts and procedures"
+      },
+      {
+        "name": "bigquery.admin",
+        "permission": "bigquery.admin",
+        "effect": "allow",
+        "readOnly": false
+      },
+      {
+        "name": "bigquery.saved_list",
+        "permission": "bigquery.saved_list",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "Lists your saved queries with their SQL and estimates, for a source's set-up; reads no data"
+      },
+      {
+        "name": "bigquery.probe",
+        "permission": "bigquery.probe",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "Names the signed-in account for sources; makes no BigQuery call"
+      }
+    ],
     "skills": [
       "opencode-bigquery",
       "opencode-bigquery-sql"
     ],
+    "asks": [
+      "bigquery.uncapped_read"
+    ],
     "rpc": [],
     "views": [],
-    "signIns": [],
+    "signIns": [
+      {
+        "id": "google-bigquery",
+        "label": "Google Cloud (BigQuery)",
+        "integration": "bigquery-*",
+        "scopes": [
+          "https://www.googleapis.com/auth/bigquery",
+          "https://www.googleapis.com/auth/bigquery.insertdata",
+          "https://www.googleapis.com/auth/userinfo.email",
+          "openid"
+        ],
+        "relay": {
+          "redirectField": "redirectUri",
+          "portField": "callbackPort"
+        },
+        "account": {
+          "option": "accounts",
+          "label": "Account name",
+          "description": "A short name for this Google account, such as work. At Read, Google issues a token that can change BigQuery data wherever your Google account is allowed to; this plugin never uses it to, but a program that can read both OpenCode's credential store and this plugin's key file could. For Google itself to refuse changes, have your admin grant you only BigQuery Job User and Data Viewer.",
+          "placeholder": "work",
+          "value": {
+            "mode": "interactive"
+          }
+        },
+        "hostClient": {
+          "id": "google",
+          "field": "clientJson",
+          "replaces": [
+            "clientId",
+            "clientSecret"
+          ]
+        },
+        "needed": [
+          "AUTH_REQUIRED",
+          "AUTH_SCOPE_MISSING"
+        ]
+      }
+    ],
     "contributes": {
       "homeFeeds": [],
       "homeWidgets": [],
@@ -148,5 +322,105 @@
         }
       ]
     }
+  },
+  "sources": {
+    "contractVersion": 1,
+    "rpc": "google-cloud.bigquery.tools",
+    "probe": {
+      "action": "bigquery.probe"
+    },
+    "items": [
+      {
+        "id": "bigquery.jobs",
+        "kind": "events",
+        "reads": "x-bigquery/job",
+        "tool": "events_list",
+        "input": {
+          "source": "jobs"
+        },
+        "accounts": {
+          "named": true
+        },
+        "scope": {
+          "keys": [
+            "projects"
+          ],
+          "describe": "Which projects' jobs to read: only jobs you started"
+        },
+        "permission": {
+          "events": "bigquery.events_list",
+          "operations": [
+            "bigquery.jobs.list"
+          ],
+          "identity": []
+        },
+        "private": true,
+        "cost": {
+          "class": "free"
+        },
+        "maxBytes": 262144,
+        "retentionDays": 180,
+        "urlHosts": [
+          "console.cloud.google.com"
+        ]
+      },
+      {
+        "id": "bigquery.saved",
+        "kind": "snapshot",
+        "tool": "saved_read",
+        "input": {
+          "source": "saved"
+        },
+        "output": "table",
+        "params": {
+          "name": {}
+        },
+        "accounts": {
+          "named": true
+        },
+        "scope": {
+          "keys": [
+            "queries"
+          ],
+          "describe": "Which of your saved queries this reader may run; each is shown with its SQL and its estimate",
+          "suggest": {
+            "tool": "saved_list",
+            "operations": [
+              "bigquery.jobs.queryEstimate"
+            ]
+          }
+        },
+        "permission": {
+          "tool": "bigquery.saved_read",
+          "operations": [
+            "bigquery.jobs.getQueryResults",
+            "bigquery.jobs.query",
+            "bigquery.routines.get",
+            "bigquery.rowAccessPolicies.list",
+            "bigquery.tabledata.list",
+            "bigquery.tables.get"
+          ],
+          "identity": []
+        },
+        "private": true,
+        "cost": {
+          "class": "billed",
+          "units": [
+            {
+              "per": "tib",
+              "usd": 6.25,
+              "min": 0,
+              "conditions": "On-demand pricing; at most 1 GiB billed per read unless you raise it; cached reads are free"
+            }
+          ],
+          "probe": {
+            "per": "call",
+            "usd": 0
+          }
+        },
+        "maxAgeSec": 3600,
+        "maxBytes": 65536
+      }
+    ]
   }
 }

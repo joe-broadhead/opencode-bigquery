@@ -16,7 +16,8 @@ describe("the plugin in a host", () => {
       expect(rules.slice(base + 1, base + 1 + defaultRules("all").length)).toEqual(defaultRules("all"))
       const answer = await status(host)
       expect(isStatus(answer)).toBe(true)
-      expect(answer).toMatchObject({ access: "all", unguardedAgents: [] })
+      // The nineteen tools are registered; no package has built one yet.
+      expect(answer).toMatchObject({ access: "all", unguardedAgents: [], tools: { registered: 19, notBuilt: 19 } })
     } finally {
       await host.close()
     }

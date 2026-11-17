@@ -1,28 +1,61 @@
 import { describe, expect, it } from "vitest"
+import { ACTIONS, ASKS } from "../../src/domain/actions.js"
+import { ALL_SCOPES, DISCLOSURE } from "../../src/domain/levels.js"
 import { loadOptions } from "../../src/options.js"
 import { defaultRules } from "../../src/permissions.js"
+import { toolSpecs } from "../../src/registry.js"
 import { SKILL_IDS } from "../../src/skills.js"
 import { type Declaration, type DeclaredTool, declarationProblems, docProblems, effectFromRules, lineProblems, readPackage } from "../support/jelly-kit.js"
 import { ACCESS_CHOICES, type PluginSetting, settingChoices, settingsProblems, settingValueIssue } from "../support/jelly-settings.js"
+import { fakePorts } from "../fake/ports.js"
 
 /**
  * The `jelly` section of package.json, which Jelly reads without loading the plugin. The shared kit checks it against
- * Jelly's plugin authors' standard; the tests below add what only BigQuery declares.
+ * Jelly's plugin authors' standard; the tests below add what only BigQuery declares. Jelly's agents have no base
+ * "allow everything" rule, so the plugin's own default rules never reach them; Jelly's own access rules decide there
+ * (test/conformance/jelly-master.test.ts simulates them against Jelly's own contract when it is at hand).
  */
 
 const ROOT = new URL("../../", import.meta.url)
 const manifest = readPackage(ROOT)
-const jelly = manifest.jelly as Declaration & { rpc: unknown[]; views: unknown[]; contributes: Record<string, unknown[]> & { settings: PluginSetting[] }; tools: DeclaredTool[] }
+type SignIn = { id: string; label: string; integration: string; scopes: string[]; account: { description: string; option: string }; needed: string[] }
+const jelly = manifest.jelly as Declaration & { asks: string[]; rpc: unknown[]; views: unknown[]; signIns: SignIn[]; contributes: Record<string, unknown[]> & { settings: PluginSetting[] }; tools: DeclaredTool[] }
 
 describe("the jelly declaration", () => {
   it("follows the plugin authors' standard, with the effects the plugin's own default rules give", () => {
-    const problems = declarationProblems(ROOT, { effectOf: effectFromRules(defaultRules()), actionPermissions: true })
-    // TODO(Day 0): the tools are declared with the contract; then this is [].
-    expect(problems).toEqual(jelly.tools.length === 0 ? ["jelly.tools is empty"] : [])
+    const registered = toolSpecs(loadOptions({}), fakePorts()).map((spec) => spec.action)
+    expect(declarationProblems(ROOT, { effectOf: effectFromRules(defaultRules()), actionPermissions: true, registered })).toEqual([])
+  })
+
+  it("declares exactly the action table: every action the plugin asserts, each read read-only", () => {
+    expect(jelly.tools).toEqual(
+      ACTIONS.map((entry) => ({ name: entry.action, permission: entry.action, effect: "allow", readOnly: entry.readOnly, ...(entry.note ? { note: entry.note } : {}) })),
+    )
+    expect(jelly.tools).toHaveLength(21)
+    expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(14)
+  })
+
+  it("declares the one run-time ask, the uncapped read, and says on the card what Jelly does with it at each level", () => {
+    expect(jelly.asks).toEqual([ASKS.uncappedRead])
+    // Under Allowed Jelly runs a declared ask without asking (D165), so the card must not promise a prompt there.
+    const note = jelly.tools.find((tool) => tool.name === "bigquery.query")!.note!
+    expect(note).toContain("under Allowed without asking")
+    expect(note).toContain("120 seconds")
+    expect(note).toContain("otherwise you are asked first")
   })
 
   it("declares the skills the plugin registers", () => {
     expect(jelly.skills).toEqual([...SKILL_IDS])
+  })
+
+  it("declares one Google sign-in with every level's scopes and the disclosure", () => {
+    expect(jelly.signIns).toHaveLength(1)
+    const [signIn] = jelly.signIns
+    expect(signIn).toMatchObject({ id: "google-bigquery", label: "Google Cloud (BigQuery)", integration: "bigquery-*", needed: ["AUTH_REQUIRED", "AUTH_SCOPE_MISSING"] })
+    expect(signIn!.scopes).toEqual([...ALL_SCOPES])
+    expect(signIn!.account.option).toBe("accounts")
+    expect(signIn!.account.description).toContain(DISCLOSURE.bound)
+    expect(signIn!.account.description.length).toBeLessThanOrEqual(500)
   })
 
   it("states the cost and the admin step in one line each", () => {
