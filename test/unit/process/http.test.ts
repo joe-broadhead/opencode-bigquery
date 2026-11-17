@@ -88,7 +88,7 @@ describe("transport", () => {
 
   test("keeps at most eight requests in flight per process", async () => {
     await withFake(async (fake) => {
-      fake.answer({ method: "GET", path: TABLE }, { status: 200, delayMs: 25, body: table })
+      fake.answer({ method: "GET", path: TABLE }, { status: 200, delayMs: 100, body: table })
       const { port } = portFor(fake)
       const ref = { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_table" }
       await Promise.all(Array.from({ length: 12 }, () => port.getTable("default", ref, signal())))

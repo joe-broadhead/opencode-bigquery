@@ -106,7 +106,7 @@ export async function startFake(): Promise<BigQueryFake> {
       const answer = next(recorded)
       if (answer.delayMs !== undefined) await sleep(answer.delayMs)
       answered += 1
-      respond(response, answer)
+      await respond(response, answer)
     } catch (error) {
       answered += 1
       respond(response, { status: 500, body: { error: { code: 500, message: String(error), errors: [{ reason: "fakeFailure", message: String(error) }] } } })
@@ -208,9 +208,23 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
   return JSON.parse(text) as unknown
 }
 
-function respond(response: ServerResponse, answer: FakeAnswer): void {
+/** A body that never settles: the fake holds the request in flight (no headers) until the test stops it or closes the fake. */
+export function pending(): unknown {
+  return new Promise(() => undefined)
+}
+
+function respond(response: ServerResponse, answer: FakeAnswer): Promise<void> | void {
   if (response.writableEnded || response.destroyed) return
-  const body = answer.body === undefined ? "" : typeof answer.body === "string" ? answer.body : JSON.stringify(answer.body)
+  // An answer's body may be a promise: nothing is written until it settles, which is how a test holds a call in flight.
+  if (answer.body instanceof Promise) {
+    return answer.body.then((body) => write(response, answer, body))
+  }
+  return write(response, answer, answer.body)
+}
+
+function write(response: ServerResponse, answer: FakeAnswer, value: unknown): void {
+  if (response.writableEnded || response.destroyed) return
+  const body = value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value)
   response.writeHead(answer.status, { "content-type": "application/json", ...answer.headers })
   response.end(body)
 }

@@ -8,9 +8,9 @@ import { loadOptions } from "../../src/options.js"
 import { createBigQueryPort } from "../../src/process/bigquery.js"
 import { convertRows } from "../../src/process/values.js"
 import type { SchemaField } from "../../src/domain/google.js"
-import { dryRunOf, replay, startFake, type Fixture } from "../fake/bigquery.js"
+import { dryRunOf, pending, replay, startFake, type Fixture } from "../fake/bigquery.js"
 import { FakeAuth, readRecord } from "../fake/ports.js"
-import { cleanup, startHost } from "./harness.js"
+import { cleanup, startHost, until } from "./harness.js"
 
 afterAll(cleanup)
 
@@ -69,16 +69,19 @@ describe("the runtime in a host", () => {
   test("a stopped call cancels the job it started, and the answer is CANCELLED", async () => {
     const fake = await startFake()
     replay(fake, fixture("job-running"))
-    fake.answer({ method: "GET", path: results }, { status: 200, delayMs: 300, body: { jobComplete: false } })
+    const resultsPath = `/bigquery/v2/projects/${PROJECT}/queries/${JOB}`
+    fake.answer({ method: "GET", path: resultsPath }, { status: 200, body: pending() })
     fake.answer({ method: "POST", path: cancel }, { status: 200, body: { jobReference: { projectId: PROJECT, jobId: JOB, location: "EU" }, status: { state: "DONE" } } })
     const host = await startHost({ fake })
     try {
       const bigquery = port()
       const run = await bigquery.run({ ...query, jobId: JOB, location: "EU", maximumBytesBilled: 10 * 2 ** 30, jobTimeoutMs: 600_000, labels: { oc_plugin: "bigquery" } }, new AbortController().signal)
-
       const controller = new AbortController()
-      setTimeout(() => controller.abort(), 30)
-      const error = (await bigquery.results("default", run.ref, { timeoutMs: 30_000, maxResults: 51 }, controller.signal).catch((thrown: unknown) => thrown)) as BigQueryError
+
+      const call = bigquery.results("default", run.ref, { timeoutMs: 30_000, maxResults: 51 }, controller.signal)
+      await until("the results request reached the fake", async () => fake.requests.some((request) => request.method === "GET" && request.path === resultsPath))
+      controller.abort()
+      const error = (await call.catch((thrown: unknown) => thrown)) as BigQueryError
 
       expect(error).toBeInstanceOf(BigQueryError)
       expect(error.code).toBe("CANCELLED")

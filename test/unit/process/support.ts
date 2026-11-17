@@ -66,6 +66,19 @@ export async function withFake<T>(body: (fake: BigQueryFake) => Promise<T>): Pro
   }
 }
 
+/**
+ * Waits until the fake has recorded a request a test expects: the call is then in flight, and a test can stop it
+ * without racing a timer against the answer. The answers it races are delayed by hundreds of milliseconds, so the
+ * poll's own timer (a few milliseconds) always comes first.
+ */
+export async function inFlight(fake: BigQueryFake, match: (request: { readonly method: string; readonly path: string }) => boolean): Promise<void> {
+  for (let tries = 0; tries < 2_000; tries += 1) {
+    if (fake.requests.some(match)) return
+    await new Promise((done) => setTimeout(done, 5))
+  }
+  throw new Error("the request never reached the fake")
+}
+
 export function queryRequest(overrides: Partial<QueryJobRequest> = {}): QueryJobRequest {
   return { account: "default", project: PROJECT, sql: "SELECT id FROM `invented-project.invented_dataset.invented_table`", ...overrides }
 }
