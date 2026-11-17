@@ -42,6 +42,14 @@ add the new tag.
 The `access` option (`all`, the default; `ask-changes`; `read-only`) generates default rules for every agent with a
 base allow. See [Permissions](docs/configuration.md#permissions).
 
+### Queries the byte cap cannot bound
+
+A query over a table with row access policies, or over an external table, cannot be bounded by the byte cap, because
+BigQuery's own estimate for it is zero or too low. Such a query runs only from a plan whose preview says so, with a
+120-second job limit (`uncappedTimeoutSeconds`). In local OpenCode you are asked first at `all` and `ask-changes`, and
+it is denied at `read-only`. In Jelly, under Allowed it runs without asking, bounded only by that time limit and your
+budget if you set one; under Ask before changes or Read only, Jelly asks you first. A script can never run one.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md).

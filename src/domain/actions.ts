@@ -65,7 +65,8 @@ export const ACTIONS: readonly ActionEntry[] = [
     class: "read",
     operation: "bigquery.jobs.query",
     owner: "C",
-    note: "Runs only reads BigQuery's dry run calls SELECT or ASSERT, under a byte cap; one the cap cannot bound runs from a plan after you are asked",
+    // Jelly's card. Under Allowed, Jelly runs a declared ask without asking (its D165), and this plugin accepts that.
+    note: "Runs SELECT and ASSERT under a byte cap. One the cap cannot bound runs from a plan: under Allowed without asking, limited to 120 seconds and your budget if set; otherwise you are asked first",
   }),
   entry("job", { kind: "tool", readOnly: true, class: "read", operation: "bigquery.jobs.get", owner: "C" }),
   entry("jobs", { kind: "tool", readOnly: true, class: "read", operation: "bigquery.jobs.list", owner: "C" }),

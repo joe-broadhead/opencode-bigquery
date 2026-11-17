@@ -33,6 +33,16 @@ never edit each other's files or the shared contract under each other.
 - **CHANGELOG.md** is F's; every package adds its lines under `[Unreleased]` in its own pull request description, and F
   merges them.
 
+## Integration checklist
+
+When A to F have landed, before the live check:
+
+- Re-baseline the pack budget (`MAX_PACKED_BYTES` in `test/pack/pack.test.ts`, 320 KiB at Day 0) to the measured
+  packed size plus 15%, with the measurement in the comment.
+- Set `WRITE_LEVEL_AVAILABLE` (`src/constants.ts`) from live check L16: false if Google returns the write marker on a
+  Read sign-in.
+- Confirm in live check L7 that each probe partition floor (`src/domain/probe.ts`) satisfies `requirePartitionFilter`.
+
 ## Files
 
 | Path | Owner |

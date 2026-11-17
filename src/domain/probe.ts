@@ -11,24 +11,29 @@ const quote = (name: string) => `\`${name.replace(/[\\`]/g, (char) => `\\${char}
 
 export const tablePath = (ref: TableReference) => quote(`${ref.projectId}.${ref.datasetId}.${ref.tableId}`)
 
-/** The lowest value of a partitioning column's type, so `>= minimum OR IS NULL` keeps every partition. */
+/**
+ * The lowest value of a partitioning column's type, so `>= minimum OR IS NULL` keeps every partition. An integer-range
+ * column's floor is INT64's minimum, not the range's start: rows below the start sit in `__UNPARTITIONED__`, and a
+ * table holding only those must not probe 0 (review bigquery-1, LOW 1). L7 confirms Google takes the literal as is.
+ */
 export const TYPE_MINIMUM: Readonly<Record<string, string>> = {
   DATE: "DATE '0001-01-01'",
   TIMESTAMP: "TIMESTAMP '0001-01-01 00:00:00+00'",
   DATETIME: "DATETIME '0001-01-01'",
+  INT64: "-9223372036854775808",
 }
 
 /** How the table is partitioned, as tables.get reports it. */
 export type Partitioning =
   | { readonly kind: "column"; readonly column: string; readonly type: "DATE" | "TIMESTAMP" | "DATETIME" }
-  | { readonly kind: "range"; readonly column: string; readonly start: string }
+  | { readonly kind: "range"; readonly column: string }
   | { readonly kind: "ingestion" }
 
 /** A filter that satisfies `requirePartitionFilter` and keeps every row, the `__NULL__` and `__UNPARTITIONED__` partitions included. */
 export function partitionFloor(partitioning: Partitioning): string {
   if (partitioning.kind === "ingestion") return `_PARTITIONTIME >= ${TYPE_MINIMUM.TIMESTAMP} OR _PARTITIONTIME IS NULL`
   const column = quote(partitioning.column)
-  const minimum = partitioning.kind === "range" ? partitioning.start.replace(/[^0-9-]/g, "") : TYPE_MINIMUM[partitioning.type]
+  const minimum = partitioning.kind === "range" ? TYPE_MINIMUM.INT64 : TYPE_MINIMUM[partitioning.type]
   return `${column} >= ${minimum} OR ${column} IS NULL`
 }
 

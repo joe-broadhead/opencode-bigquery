@@ -26,3 +26,10 @@ export const NAMESPACE_DESCRIPTION: Readonly<Record<Access, string>> = {
 export const SUPPORTED_HOST = ">=2.2.3 <2.4.0"
 /** The OpenCode releases every check runs on: the one list. Status calls only these "tested". */
 export const TESTED_HOSTS: readonly string[] = ["2.2.3", "2.2.4", "2.2.5", "2.2.6", "2.2.7", "2.3.0"]
+
+/**
+ * Whether this build ships the Read and write level (design §3.1, Q12). A build constant, never an option: if live check
+ * L16 shows Google returning the write marker on a Read sign-in, this becomes false and the release ships with writes
+ * off (`WRITE_LEVEL_UNAVAILABLE`). The auth port passes it to `decideLevel`; nothing else sets it.
+ */
+export const WRITE_LEVEL_AVAILABLE = true

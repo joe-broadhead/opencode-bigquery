@@ -91,7 +91,7 @@ export interface LevelInput {
   readonly refreshedScopes?: readonly string[]
   /** The account's `level` option: it can only lower. */
   readonly configured?: Level
-  /** False while this release ships with the write level turned off (design §3.1, L16 and Q12). */
+  /** `WRITE_LEVEL_AVAILABLE` (src/constants.ts), a build constant: false while this release ships with writes off. Never an option. */
   readonly writeAvailable: boolean
 }
 

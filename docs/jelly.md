@@ -19,8 +19,10 @@ declared effect against the plugin's own default rules.
 One action is a run-time ask, `bigquery.uncapped_read` (`jelly.asks`): `bigquery_query({ planId })` asserts it before
 it runs a read the byte cap cannot bound, such as one over a table with row access policies or an external table. With
 Jelly's rules it runs without asking at Allowed, and asks at Ask before changes and at Read only, as the block below
-says. In local OpenCode the plugin's own default rules ask for it at `all` and `ask-changes` and deny it at
-`read-only`. A script cannot answer an ask, so the tools RPC refuses such a plan from a script.
+says. At Allowed such a read is then bounded only by its 120-second job limit (`uncappedTimeoutSeconds`) and your
+budget, if you set one: BigQuery bills what it actually reads, which can be more than the byte cap. Choose Ask before
+changes to be asked first. In local OpenCode the plugin's own default rules ask for it at `all` and `ask-changes` and
+deny it at `read-only`. A script cannot answer an ask, so the tools RPC refuses such a plan from a script.
 
 The family's shared rules, word for word from Jelly's guide:
 

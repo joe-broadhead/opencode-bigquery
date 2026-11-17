@@ -35,8 +35,13 @@ describe("the jelly declaration", () => {
     expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(14)
   })
 
-  it("declares the one run-time ask, the uncapped read", () => {
+  it("declares the one run-time ask, the uncapped read, and says on the card what Jelly does with it at each level", () => {
     expect(jelly.asks).toEqual([ASKS.uncappedRead])
+    // Under Allowed Jelly runs a declared ask without asking (D165), so the card must not promise a prompt there.
+    const note = jelly.tools.find((tool) => tool.name === "bigquery.query")!.note!
+    expect(note).toContain("under Allowed without asking")
+    expect(note).toContain("120 seconds")
+    expect(note).toContain("otherwise you are asked first")
   })
 
   it("declares the skills the plugin registers", () => {

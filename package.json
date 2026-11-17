@@ -146,7 +146,7 @@
         "permission": "bigquery.query",
         "effect": "allow",
         "readOnly": true,
-        "note": "Runs only reads BigQuery's dry run calls SELECT or ASSERT, under a byte cap; one the cap cannot bound runs from a plan after you are asked"
+        "note": "Runs SELECT and ASSERT under a byte cap. One the cap cannot bound runs from a plan: under Allowed without asking, limited to 120 seconds and your budget if set; otherwise you are asked first"
       },
       {
         "name": "bigquery.job",

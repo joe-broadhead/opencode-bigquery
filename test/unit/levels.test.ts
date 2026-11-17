@@ -1,8 +1,12 @@
 // The write level is Google's grant: the sign-in record and the scopes of this process's last refresh (design §3.1).
+import { readdirSync, readFileSync } from "node:fs"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import { WRITE_LEVEL_AVAILABLE } from "../../src/constants.js"
 import { BigQueryError } from "../../src/domain/errors.js"
 import { ALL_SCOPES, authorizationParams, decideLevel, DISCLOSURE, FORBIDDEN_AUTHORIZATION_PARAMS, requireWrite, SCOPES, scopesFor, SignInRecordSchema } from "../../src/domain/levels.js"
-import { loadOptions } from "../../src/options.js"
+import { loadOptions, OptionsSchema } from "../../src/options.js"
 import { FakeAuth, readRecord, writeRecord } from "../fake/ports.js"
 
 const signal = new AbortController().signal
@@ -89,5 +93,27 @@ describe("the disclosure", () => {
     expect(DISCLOSURE.bound).toContain("this plugin's key file")
     expect(DISCLOSURE.unbound).not.toContain("key file")
     expect(DISCLOSURE.bound.endsWith("Job User and Data Viewer.")).toBe(true)
+  })
+})
+
+describe("the write level's availability (bigquery-1 LOW 2)", () => {
+  const SRC = fileURLToPath(new URL("../../src", import.meta.url))
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) => (entry.isDirectory() ? walk(join(dir, entry.name)) : /\.tsx?$/.test(entry.name) ? [join(dir, entry.name)] : []))
+
+  it("is a build constant, true in this build", () => {
+    expect(WRITE_LEVEL_AVAILABLE).toBe(true)
+  })
+
+  it("is no option: none is named for it, and one is refused", () => {
+    const keys = Object.keys(OptionsSchema.shape)
+    expect(keys.filter((key) => /write|available/i.test(key))).toEqual([])
+    for (const key of ["writeAvailable", "writeLevelAvailable", "WRITE_LEVEL_AVAILABLE"]) expect(() => loadOptions({ [key]: true })).toThrow(/^OPTIONS_INVALID: /)
+    expect(() => loadOptions({ accounts: { work: { writeAvailable: true } } })).toThrow(/^OPTIONS_INVALID: /)
+  })
+
+  it("reaches decideLevel only from the constant: no source sets writeAvailable from anything else", () => {
+    const settings = walk(SRC).flatMap((file) => [...readFileSync(file, "utf8").matchAll(/writeAvailable\s*:\s*([^,}\n]+)/g)].map((match) => `${file.slice(SRC.length)}: ${match[1]!.trim()}`))
+    expect(settings.filter((line) => !/: (boolean|WRITE_LEVEL_AVAILABLE)$/.test(line))).toEqual([])
   })
 })
