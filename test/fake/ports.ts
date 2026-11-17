@@ -92,6 +92,8 @@ export class FakeAuth implements AuthPort {
 
   async token(alias: string, _signal: AbortSignal): Promise<AccessToken> {
     this.calls.push({ method: "token", args: [alias] })
+    // A token account has no refresh, so its scopes are unknown: empty (src/ports.ts AccessToken.scopes).
+    if (this.account(alias).mode === "token") return { token: `invented-access-token-${alias}`, expiresAt: Date.now() + 3_600_000, scopes: [] }
     const scopes = this.refreshed.get(alias) ?? this.refresh(alias)
     return { token: `invented-access-token-${alias}`, expiresAt: Date.now() + 3_600_000, scopes }
   }

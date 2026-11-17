@@ -89,7 +89,7 @@ export const OptionsSchema = z
     onDemandUsdPerTiB: z.number().positive().max(1000).default(6.25),
     slotHourUsd: z.number().positive().max(1000).optional(),
     maxRows: z.number().int().min(1).max(500).default(50),
-    maxInlineBytes: bytes.default(32 * 2 ** 10),
+    maxInlineBytes: bytes.refine((value) => value <= 256 * 2 ** 10, "at most 256 KiB").default(32 * 2 ** 10),
     maxSaveRows: z.number().int().min(1).max(100_000_000).default(1_000_000),
     maxSaveBytes: bytes.default(256 * 2 ** 20),
     resultsDir: z.string().min(1).max(1024).default(".bigquery/results"),

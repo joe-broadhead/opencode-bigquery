@@ -15,6 +15,14 @@ export interface AuthDeps {
   readonly adc: typeof loadAdcLibrary
 }
 
+/**
+ * The sign-in integration `bigquery-<alias>` and the `/bigquery-doctor` and `/bigquery-signout` commands. The plugin
+ * calls it in setup with the same options object the ports were built from. Unbuilt here: it registers nothing.
+ */
+export async function registerAuth(_ctx: unknown, _env: Omit<AuthDeps, "adc"> & Partial<Pick<AuthDeps, "adc">>): Promise<{ dispose(): Promise<void> }> {
+  return { dispose: async () => undefined }
+}
+
 export function createAuthPort(deps: Omit<AuthDeps, "adc"> & Partial<Pick<AuthDeps, "adc">>): AuthPort {
   const accounts = Object.entries(accountsOf(deps.options)).map(([alias, settings]) => ({ alias, mode: settings.mode }))
   const adc = deps.adc ?? loadAdcLibrary

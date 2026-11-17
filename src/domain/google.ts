@@ -43,7 +43,11 @@ export interface JobReference {
 /** `totalBytesProcessedAccuracy` (dry-run jobs only). */
 export type Accuracy = "PRECISE" | "UPPER_BOUND" | "LOWER_BOUND" | "UNKNOWN"
 
-/** A query parameter, as jobs.insert takes it. */
+/**
+ * A query parameter, as jobs.insert takes it: Google's `QueryParameter`, serialised unchanged. `parameterValue` is
+ * Google's `QueryParameterValue` shape, `{ value }` for a scalar and `{ arrayValues: [{ value }] }` for an array, whose
+ * `parameterType` is `{ type: "ARRAY", arrayType: { type } }`.
+ */
 export interface QueryParameter {
   readonly name?: string
   readonly parameterType: { readonly type: string; readonly arrayType?: unknown; readonly structTypes?: unknown }

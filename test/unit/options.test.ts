@@ -45,6 +45,11 @@ describe("options", () => {
     expect(() => loadOptions({ maxBytesBilled: "200GiB" })).toThrow(/maxBytesBilled/)
   })
 
+  it("caps maxInlineBytes at 256 KiB (design §7)", () => {
+    expect(loadOptions({ maxInlineBytes: "256KiB" }).maxInlineBytes).toBe(256 * 1024)
+    expect(() => loadOptions({ maxInlineBytes: 256 * 1024 + 1 })).toThrow(/^OPTIONS_INVALID: Invalid plugin option "maxInlineBytes": at most 256 KiB/)
+  })
+
   it("refuses an unknown option with OPTIONS_INVALID, naming it, nested ones too", () => {
     expect(() => loadOptions({ acess: "all" })).toThrow(/^OPTIONS_INVALID: Invalid plugin option "acess": this option does not exist\. Next step: /)
     expect(() => loadOptions({ accounts: { work: { levle: "read" } } })).toThrow(/"accounts\.work\.levle": this option does not exist/)

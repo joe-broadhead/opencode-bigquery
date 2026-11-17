@@ -88,6 +88,15 @@ describe("the level", () => {
   })
 })
 
+describe("a token account", () => {
+  it("has empty scopes (unknown, not missing), and stays read", async () => {
+    const auth = new FakeAuth({ ci: { mode: "token", record: writeRecord(), refreshScopes: WITH_MARKER } })
+    expect((await auth.token("ci", signal)).scopes).toEqual([])
+    expect(auth.refreshes.get("ci")).toBeUndefined()
+    expect(await auth.level("ci", signal)).toMatchObject({ level: "read", refusal: "ACCOUNT_READ_ONLY" })
+  })
+})
+
 describe("the disclosure", () => {
   it("has a bound and an unbound wording, the unbound one without the key file", () => {
     expect(DISCLOSURE.bound).toContain("this plugin's key file")

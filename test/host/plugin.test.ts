@@ -1,6 +1,9 @@
 // The built plugin in an embedded OpenCode host. Nothing leaves the machine: close() fails the test if the host tried.
 import { afterAll, describe, expect, test } from "bun:test"
+import { TOOLS } from "../../src/domain/actions.js"
+import type { ToolName } from "../../src/domain/contract.js"
 import { defaultRules } from "../../src/permissions.js"
+import { HANDLERS } from "../../src/registry.js"
 import { isStatus } from "../../src/rpc.js"
 import { agentRules, cleanup, pluginState, startHost, status } from "./harness.js"
 
@@ -16,8 +19,8 @@ describe("the plugin in a host", () => {
       expect(rules.slice(base + 1, base + 1 + defaultRules("all").length)).toEqual(defaultRules("all"))
       const answer = await status(host)
       expect(isStatus(answer)).toBe(true)
-      // The nineteen tools are registered; no package has built one yet.
-      expect(answer).toMatchObject({ access: "all", unguardedAgents: [], tools: { registered: 19, notBuilt: 19 } })
+      // The nineteen tools are registered; those no package has built yet answer NOT_BUILT.
+      expect(answer).toMatchObject({ access: "all", unguardedAgents: [], tools: { registered: 19, notBuilt: TOOLS.filter((entry) => HANDLERS[entry.name as ToolName] === undefined).length } })
     } finally {
       await host.close()
     }

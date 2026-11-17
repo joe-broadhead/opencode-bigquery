@@ -52,6 +52,8 @@ export const RPC_METHOD_NAMES: readonly string[] = RPC_METHODS.map((entry) => en
 /** The operation a call's first assert names. */
 export function operationOf(entry: ActionEntry, input: Record<string, unknown>): string {
   if (entry.operation !== "input") return entry.operation
+  // bigquery_table: the table's metadata, a sample (a data read too), or its partitions (an INFORMATION_SCHEMA query).
+  if (entry.name === "table") return input.partitions === true ? "bigquery.jobs.query" : input.sample ? "bigquery.tabledata.list" : "bigquery.tables.get"
   // bigquery_list: projects, a project's datasets, or a dataset's tables or routines.
   if (input.project === undefined) return "bigquery.projects.list"
   if (input.dataset === undefined) return "bigquery.datasets.list"
