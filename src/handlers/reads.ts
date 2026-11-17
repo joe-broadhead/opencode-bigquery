@@ -25,7 +25,7 @@ import { actionOf } from "../domain/actions.js"
 import { assertObjectResources, jobVerdict, prepareRead, readContext, runRead, saveNext, type PreparedRead, type ReadContext, type ReadRun } from "../guards/read.js"
 import { cellValue, rowValues, shapeRows } from "../guards/results.js"
 import { RowPolicyProber, type RowVerdict } from "../guards/rowpolicy.js"
-import { inlineDenied, rowGate } from "../guards/rows.js"
+import { rowGate } from "../guards/rows.js"
 import type { PolicyVerdict } from "../guards/policy.js"
 import type { FenceObject } from "../guards/fence.js"
 import { sessionHash } from "../guards/session.js"
@@ -650,11 +650,13 @@ async function jobGate(status: JobStatus, context: HandlerContext) {
     ? prepared.policy
     : status.statementType === "SCRIPT" || status.statementType === "CALL"
       ? { inline: false, why: "the job is a script or procedure whose reads this process cannot see" }
-      : unknown
-        ? { inline: false, why: "the metadata of a table the job references could not be read" }
-        : facts.some((table) => table.tagged.length > 0)
-          ? { inline: false, why: "the job references a table with policy-tagged columns, and this process did not prepare it" }
-          : { inline: true }
+      : (status.referencedLogicalViews?.length ?? 0) > 0 || (status.referencedRoutines?.length ?? 0) > 0
+        ? { inline: false, why: "the job reads a view or a routine whose columns this process cannot check" }
+        : unknown
+          ? { inline: false, why: "the metadata of a table the job references could not be read" }
+          : facts.some((table) => table.tagged.length > 0)
+            ? { inline: false, why: "the job references a table with policy-tagged columns, and this process did not prepare it" }
+            : { inline: true }
   return { ...rowGate({ options: context.options, account: context.account, settings, tables: facts, policy }), facts }
 }
 

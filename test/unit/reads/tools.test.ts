@@ -309,6 +309,7 @@ describe("bigquery_job's row gate (review H-1)", () => {
       { name: "tagged", table: tagged, status: jobStatus({ referencedTables: [tableRef()] }) },
       { name: "inline.deny", table: nativeTable(), status: jobStatus({ referencedTables: [tableRef()] }), extra: { accounts: { default: { billingProject: PROJECT, location: LOCATION, inline: { deny: [`${PROJECT}.sales`] } } } } },
       { name: "script", table: nativeTable(), status: jobStatus({ statementType: "SCRIPT", referencedTables: [] }) },
+      { name: "a view", table: nativeTable({ type: "VIEW", view: { query: "SELECT * FROM t" } }), status: jobStatus({ referencedTables: [], referencedLogicalViews: [tableRef("v")] }) },
     ]
     for (const item of cases) {
       const h = harness(undefined, item.extra ?? {})
