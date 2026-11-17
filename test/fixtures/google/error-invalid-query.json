@@ -1,0 +1,14 @@
+{
+  "request": { "method": "POST", "path": "/bigquery/v2/projects/invented-project/jobs", "dryRun": true },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Syntax error: Unexpected keyword FROM at [1:9]",
+        "errors": [{ "message": "Syntax error: Unexpected keyword FROM at [1:9]", "domain": "global", "reason": "invalidQuery", "location": "query", "locationType": "parameter" }],
+        "status": "INVALID_ARGUMENT"
+      }
+    }
+  }
+}

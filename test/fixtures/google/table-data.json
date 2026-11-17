@@ -1,0 +1,30 @@
+{
+  "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_table/data" },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#tableDataList",
+      "etag": "invented-etag",
+      "totalRows": "1200",
+      "pageToken": "invented-data-page-2",
+      "rows": [
+        {
+          "f": [
+            { "v": "1" },
+            { "v": "alpha" },
+            { "v": { "f": [{ "v": "Lisbon" }, { "v": "1000" }] } },
+            { "v": [{ "v": "one" }, { "v": "two" }] }
+          ]
+        },
+        {
+          "f": [
+            { "v": "2" },
+            { "v": null },
+            { "v": null },
+            { "v": [] }
+          ]
+        }
+      ]
+    }
+  }
+}

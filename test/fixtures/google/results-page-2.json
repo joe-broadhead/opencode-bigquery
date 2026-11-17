@@ -1,0 +1,17 @@
+{
+  "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/queries/oc_00000000-0000-4000-8000-000000000001" },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#getQueryResultsResponse",
+      "jobReference": { "projectId": "invented-project", "jobId": "oc_00000000-0000-4000-8000-000000000001", "location": "EU" },
+      "jobComplete": true,
+      "totalRows": "3",
+      "rows": [
+        {
+          "f": [{ "v": "3" }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": "last" }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": null }, { "v": [] }, { "v": null }, { "v": [] }, { "v": null }]
+        }
+      ]
+    }
+  }
+}

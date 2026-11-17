@@ -1,0 +1,21 @@
+{
+  "request": { "method": "POST", "path": "/bigquery/v2/projects/invented-project/jobs", "dryRun": true },
+  "response": {
+    "status": 403,
+    "body": {
+      "error": {
+        "code": 403,
+        "message": "BigQuery API has not been used in project 000000000000 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/bigquery.googleapis.com/overview?project=000000000000 then retry.",
+        "errors": [
+          {
+            "message": "BigQuery API has not been used in project 000000000000 before or it is disabled.",
+            "domain": "usageLimits",
+            "reason": "accessNotConfigured",
+            "extendedHelp": "https://console.developers.google.com"
+          }
+        ],
+        "status": "PERMISSION_DENIED"
+      }
+    }
+  }
+}

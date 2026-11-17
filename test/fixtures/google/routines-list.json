@@ -1,0 +1,27 @@
+{
+  "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/datasets/invented_dataset/routines" },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#routineList",
+      "routines": [
+        {
+          "kind": "bigquery#routine",
+          "routineReference": { "projectId": "invented-project", "datasetId": "invented_dataset", "routineId": "invented_routine" },
+          "routineType": "SCALAR_FUNCTION",
+          "language": "SQL",
+          "definitionBody": "x * 2",
+          "arguments": [{ "name": "x", "dataType": { "typeKind": "INT64" } }]
+        },
+        {
+          "kind": "bigquery#routine",
+          "routineReference": { "projectId": "invented-project", "datasetId": "invented_dataset", "routineId": "invented_python" },
+          "routineType": "SCALAR_FUNCTION",
+          "language": "PYTHON",
+          "definitionBody": "return x",
+          "remoteFunctionOptions": { "endpoint": "https://invented.invalid/v1" }
+        }
+      ]
+    }
+  }
+}

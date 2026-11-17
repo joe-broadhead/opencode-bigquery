@@ -1,0 +1,16 @@
+{
+  "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_table/rowAccessPolicies" },
+  "response": {
+    "status": 200,
+    "body": {
+      "rowAccessPolicies": [
+        {
+          "policyId": "invented_policy",
+          "policyReference": { "projectId": "invented-project", "datasetId": "invented_dataset", "tableId": "invented_table", "policyId": "invented_policy" },
+          "filterPredicate": "region = 'EU'",
+          "creationTime": "1763377200000"
+        }
+      ]
+    }
+  }
+}

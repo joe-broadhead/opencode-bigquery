@@ -1,0 +1,15 @@
+{
+  "request": { "method": "GET", "path": "/bigquery/v2/projects" },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#projectList",
+      "etag": "invented-etag",
+      "projects": [
+        { "kind": "bigquery#project", "id": "invented-project", "projectReference": { "projectId": "invented-project" }, "friendlyName": "Invented project" },
+        { "kind": "bigquery#project", "id": "invented-project-two", "projectReference": { "projectId": "invented-project-two" }, "friendlyName": "Invented project two" }
+      ],
+      "totalItems": 2
+    }
+  }
+}
