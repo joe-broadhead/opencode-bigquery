@@ -38,7 +38,7 @@ describe("transport", () => {
     })
   })
 
-  test("a 429 after three tries is RATE_LIMITED, with Google's Retry-After in seconds", async () => {
+  test("a 403 rateLimitExceeded after three tries is RATE_LIMITED, with Google's Retry-After in seconds", async () => {
     await withFake(async (fake) => {
       const path = "/bigquery/v2/projects/invented-project/queries/oc_00000000-0000-4000-8000-000000000009"
       fake.answer({ method: "GET", path }, fixture("error-rate-limited").response)
@@ -47,7 +47,19 @@ describe("transport", () => {
       expect(error.code).toBe("RATE_LIMITED")
       expect(error.state).toBe("failed")
       expect(error.extras.retryAfterSec).toBe(2)
+      // 403 is not a permission error here: Google's reason wins, and a rate limit is retried (M-3).
       expect(fake.requests).toHaveLength(3)
+    })
+  })
+
+  test("a 5xx with a proxy's HTML body is retried before it is parsed (L-1)", async () => {
+    await withFake(async (fake) => {
+      replay(fake, fixture("error-proxy-503"))
+      fake.answer({ method: "GET", path: "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_proxy_table" }, { status: 200, body: { tableReference: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_proxy_table" }, type: "TABLE" } })
+      const { port } = portFor(fake)
+      const table = await port.getTable("default", { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_proxy_table" }, signal())
+      expect(table.type).toBe("TABLE")
+      expect(fake.requests).toHaveLength(2)
     })
   })
 

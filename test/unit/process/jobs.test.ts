@@ -1,7 +1,8 @@
 // Design §14.1 the read path's runs, with live checks L4 and L5 at the port's boundary: every run carries its byte cap
-// on the wire (jobs.insert's configuration.query.maximumBytesBilled), a job Google stopped at the cap is
-// BYTES_BILLED_LIMIT with nothing billed, a timeout is JOB_TIMEOUT, and a repeated client job id is a 409 `duplicate`
-// joined with jobs.get, never a second run.
+// on the wire (jobs.insert's configuration.query.maximumBytesBilled); a job Google stopped at the cap or at its time
+// limit returns its DONE status with `error` and `totalBytesBilled`, so the read path can name the code and the ledger
+// can count what it cost; the same failure arriving as Google's HTTP 400 on getQueryResults is that code already; and a
+// repeated client job id is a 409 `duplicate` joined with jobs.get, never a second run.
 import { describe, expect, test } from "vitest"
 import { BigQueryError } from "../../../src/domain/errors.js"
 import { dryRunOf, job, replay } from "../../fake/bigquery.js"
@@ -10,31 +11,58 @@ import { fixture, JOB, jobsPath, portFor, runRequest, withFake } from "./support
 const signal = () => new AbortController().signal
 
 describe("runs", () => {
-  test("the cap is the one the caller passed, in bytes, and a job stopped at it is BYTES_BILLED_LIMIT with nothing billed (L4)", async () => {
+  test("the cap is the one the caller passed, and a job stopped at it keeps the code and the 0 it billed (L4)", async () => {
     await withFake(async (fake) => {
       replay(fake, fixture("job-bytes-billed"))
       replay(fake, fixture("job-bytes-billed-get"))
       const { port } = portFor(fake)
       const jobId = "oc_00000000-0000-4000-8000-000000000002"
 
-      const error = (await port.run(runRequest({ jobId, maximumBytesBilled: 1024 }), signal()).catch((thrown: unknown) => thrown)) as BigQueryError
+      const status = await port.run(runRequest({ jobId, maximumBytesBilled: 1024 }), signal())
 
-      expect(error).toBeInstanceOf(BigQueryError)
-      expect(error.code).toBe("BYTES_BILLED_LIMIT")
-      expect(error.state).toBe("failed")
+      expect(status).toMatchObject({ state: "DONE", totalBytesBilled: 0, error: { reason: "bytesBilledLimitExceeded" } })
       const run = fake.requests.find((request) => request.method === "POST" && dryRunOf(request.body) === false)!
       expect((run.body as { configuration: { query: { maximumBytesBilled?: string } } }).configuration.query.maximumBytesBilled).toBe("1024")
-      const status = await port.getJob("default", { projectId: "invented-project", jobId, location: "EU" }, signal())
-      expect(status).toMatchObject({ state: "DONE", totalBytesBilled: 0, error: { reason: "bytesBilledLimitExceeded" } })
+      const again = await port.getJob("default", { projectId: "invented-project", jobId, location: "EU" }, signal())
+      expect(again).toMatchObject({ state: "DONE", totalBytesBilled: 0, error: { reason: "bytesBilledLimitExceeded" } })
     })
   })
 
-  test("a job that reached its time limit is JOB_TIMEOUT", async () => {
+  test("the same failure as an HTTP 400 on getQueryResults is BYTES_BILLED_LIMIT (L4)", async () => {
+    await withFake(async (fake) => {
+      replay(fake, fixture("error-bytes-billed-400"))
+      const { port } = portFor(fake)
+      const error = (await port.results("default", { projectId: "invented-project", jobId: "oc_00000000-0000-4000-8000-000000000002", location: "EU" }, { timeoutMs: 30_000, maxResults: 51 }, signal()).catch((thrown: unknown) => thrown)) as BigQueryError
+      expect(error).toBeInstanceOf(BigQueryError)
+      expect(error.code).toBe("BYTES_BILLED_LIMIT")
+      expect(error.state).toBe("failed")
+      expect(error.extras.googleError?.reason).toBe("bytesBilledLimitExceeded")
+    })
+  })
+
+  test("a job that reached its time limit keeps the bytes it billed, and a 400 says JOB_TIMEOUT (L4)", async () => {
     await withFake(async (fake) => {
       replay(fake, fixture("job-timeout"))
       const { port } = portFor(fake)
-      const error = (await port.run(runRequest({ jobId: "oc_00000000-0000-4000-8000-000000000003", jobTimeoutMs: 600_000 }), signal()).catch((thrown: unknown) => thrown)) as BigQueryError
+      const status = await port.run(runRequest({ jobId: "oc_00000000-0000-4000-8000-000000000003", jobTimeoutMs: 600_000 }), signal())
+      expect(status).toMatchObject({ state: "DONE", totalBytesBilled: 20971520, error: { reason: "timeout" } })
+      expect(JSON.stringify(status)).toContain("20971520")
+    })
+
+    await withFake(async (fake) => {
+      replay(fake, fixture("error-timeout-400"))
+      const { port } = portFor(fake)
+      const error = (await port.results("default", { projectId: "invented-project", jobId: "oc_00000000-0000-4000-8000-000000000003", location: "EU" }, { timeoutMs: 30_000, maxResults: 51 }, signal()).catch((thrown: unknown) => thrown)) as BigQueryError
       expect(error.code).toBe("JOB_TIMEOUT")
+    })
+  })
+
+  test("a job the rate limit stopped is RATE_LIMITED, from its reason on a 400 (M-4)", async () => {
+    await withFake(async (fake) => {
+      replay(fake, fixture("error-job-rate-limited-400"))
+      const { port } = portFor(fake)
+      const error = (await port.results("default", { projectId: "invented-project", jobId: "oc_00000000-0000-4000-8000-000000000004", location: "EU" }, { timeoutMs: 30_000, maxResults: 51 }, signal()).catch((thrown: unknown) => thrown)) as BigQueryError
+      expect(error.code).toBe("RATE_LIMITED")
     })
   })
 

@@ -10,13 +10,15 @@ import { pending } from "../../fake/bigquery.js"
 import { cancelPath, inFlight, jobsPath, JOB, portFor, resultsPath, runRequest, withFake } from "./support.js"
 
 const job = (jobId = JOB, state = "RUNNING") => ({ jobReference: { projectId: "invented-project", jobId, location: "EU" }, status: { state } })
-const cancelRequests = (requests: readonly { method: string; path: string }[]) => requests.filter((request) => request.method === "POST" && request.path.endsWith("/cancel"))
+/** jobs.cancel answers `{ kind, job }` (…/jobs/cancel). */
+const cancelAnswer = (state = "DONE") => ({ status: 200, body: { kind: "bigquery#jobCancelResponse", job: job(JOB, state) } })
+const cancelRequests = (requests: readonly { method: string; path: string; query: Readonly<Record<string, string>> }[]) => requests.filter((request) => request.method === "POST" && request.path.endsWith("/cancel"))
 
 describe("stop", () => {
   test("aborts a run that is in flight and cancels the job it started", async () => {
     await withFake(async (fake) => {
       fake.answer({ method: "POST", path: jobsPath, dryRun: false }, { status: 200, body: pending() })
-      fake.answer({ method: "POST", path: cancelPath() }, { status: 200, body: job(JOB, "DONE") })
+      fake.answer({ method: "POST", path: cancelPath() }, cancelAnswer())
       const { port } = portFor(fake)
       const controller = new AbortController()
 
@@ -31,6 +33,9 @@ describe("stop", () => {
       const cancels = cancelRequests(fake.requests)
       expect(cancels).toHaveLength(1)
       expect(cancels[0]!.path).toBe(cancelPath())
+      expect(cancels[0]!.query.location).toBe("EU")
+      // The cancel answered, so the port did not have to look the job up first.
+      expect(fake.requests.filter((request) => request.method === "GET" && request.path === `${jobsPath}/${JOB}`)).toHaveLength(0)
     })
   }, 10_000)
 
@@ -38,7 +43,7 @@ describe("stop", () => {
     await withFake(async (fake) => {
       fake.answer({ method: "POST", path: jobsPath, dryRun: false }, { status: 200, body: job() })
       fake.answer({ method: "GET", path: resultsPath() }, { status: 200, body: pending() })
-      fake.answer({ method: "POST", path: cancelPath() }, { status: 200, body: job(JOB, "DONE") })
+      fake.answer({ method: "POST", path: cancelPath() }, cancelAnswer())
       const { port } = portFor(fake)
       await port.run(runRequest(), new AbortController().signal)
       const controller = new AbortController()

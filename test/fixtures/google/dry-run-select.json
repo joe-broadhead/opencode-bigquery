@@ -5,6 +5,7 @@
     "body": {
       "kind": "bigquery#job",
       "etag": "invented-etag",
+      "id": "invented-project:EU.job_invented_dry_run",
       "jobReference": { "projectId": "invented-project", "jobId": "job_invented_dry_run", "location": "EU" },
       "configuration": {
         "jobType": "QUERY",

@@ -103,7 +103,8 @@ export async function startFake(): Promise<BigQueryFake> {
         at: Date.now(),
       }
       requests.push(recorded)
-      const answer = next(recorded)
+      const violation = contractViolation(recorded)
+      const answer = violation === undefined ? next(recorded) : refused(recorded, violation)
       if (answer.delayMs !== undefined) await sleep(answer.delayMs)
       answered += 1
       await respond(response, answer)
@@ -135,6 +136,21 @@ export async function startFake(): Promise<BigQueryFake> {
     // Google's revocation endpoint. The plugin must never call it (design §3.1); `revokeRequests` fails a test that did.
     if (request.path === "/revoke") return { status: 200, body: {} }
     return unrouted(request, "no route matches it")
+  }
+
+  /** The fake's own rejection: Google would not accept this request either, and a test must see it. */
+  function refused(request: RecordedRequest, why: string): FakeAnswer {
+    return {
+      status: 400,
+      body: {
+        error: {
+          code: 400,
+          message: `the fake refuses ${request.method} ${request.path}: ${why}`,
+          errors: [{ reason: "invalid", message: why, domain: "global" }],
+          status: "INVALID_ARGUMENT",
+        },
+      },
+    }
   }
 
   function unrouted(request: RecordedRequest, why: string): FakeAnswer {
@@ -299,4 +315,126 @@ export function results(overrides: Record<string, unknown> = {}): Record<string,
 /** One row in Google's `f`/`v` form, from plain values. */
 export function row(...values: readonly unknown[]): { f: { v: unknown }[] } {
   return { f: values.map((value) => ({ v: value === undefined ? null : value })) }
+}
+
+// ── The request contract ─────────────────────────────────────────────────
+
+/**
+ * What Google's REST v2 accepts, as far as this plugin may send it, so the fake rejects a request the real API would
+ * not: an unknown query parameter, an empty `location`, a body field that is not on the resource, a JSON body where the
+ * page says the body must be empty, or an enum value in the wrong case. Each operation cites the page it comes from.
+ * The limits: it checks names and enum spellings, not every nested field's type, and only the paths this plugin uses.
+ */
+export function contractViolation(request: { readonly method: string; readonly path: string; readonly query?: Readonly<Record<string, string>>; readonly body?: unknown }): string | undefined {
+  const candidates = OPERATIONS.filter((entry) => entry.path.test(request.path))
+  const method = request.method.toUpperCase()
+  // Both jobs.insert and jobs.list answer `/jobs`; prefer the operation whose method this request claims.
+  const operation = candidates.find((entry) => entry.method === method) ?? candidates[0]
+  if (operation === undefined) return undefined
+  if (operation.method !== request.method.toUpperCase()) return `Google's ${operation.name} is ${operation.method}, not ${request.method}`
+  for (const name of Object.keys(request.query ?? {})) {
+    if (!operation.params.includes(name)) return `${name} is not a parameter of ${operation.name}`
+    if (name === "location" && request.query?.[name] === "") return "Google refuses an empty location"
+  }
+  for (const [name, allowed] of Object.entries(operation.enums ?? {})) {
+    const value = request.query?.[name]
+    if (value !== undefined && !allowed.includes(value)) return `${name}=${value} is not one of ${allowed.join(", ")} for ${operation.name}`
+  }
+  const complaint = bodyViolation(operation.body, request.body)
+  return complaint === undefined ? undefined : `${operation.name}: ${complaint}`
+}
+
+interface Operation {
+  readonly name: string
+  readonly method: "GET" | "POST"
+  readonly path: RegExp
+  readonly params: readonly string[]
+  readonly body?: "job" | "query" | "permissions" | "empty" | "none"
+  readonly enums?: Readonly<Record<string, readonly string[]>>
+}
+
+const V2 = "^/bigquery/v2"
+const OPERATIONS: readonly Operation[] = [
+  { name: "projects.list", method: "GET", path: new RegExp(`${V2}/projects$`), params: ["maxResults", "pageToken"] },
+  { name: "datasets.list", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/datasets$`), params: ["all", "filter", "maxResults", "pageToken"] },
+  { name: "tables.list", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/datasets/[^/]+/tables$`), params: ["maxResults", "pageToken"] },
+  { name: "tables.get", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/datasets/[^/]+/tables/[^/:]+$`), params: ["selectedFields", "view"] },
+  { name: "tabledata.list", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/datasets/[^/]+/tables/[^/]+/data$`), params: ["maxResults", "pageToken", "selectedFields", "startIndex", "formatOptions.useInt64Timestamp"] },
+  { name: "tables.testIamPermissions", method: "POST", path: new RegExp(`${V2}/projects/[^/]+/datasets/[^/]+/tables/[^/:]+:testIamPermissions$`), params: [], body: "permissions" },
+  { name: "rowAccessPolicies.list", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/datasets/[^/]+/tables/[^/]+/rowAccessPolicies$`), params: ["pageSize", "pageToken"] },
+  { name: "routines.list", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/datasets/[^/]+/routines$`), params: ["maxResults", "pageToken", "readMask", "filter"] },
+  { name: "routines.get", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/datasets/[^/]+/routines/[^/]+$`), params: ["readMask"] },
+  { name: "jobs.insert", method: "POST", path: new RegExp(`${V2}/projects/[^/]+/jobs$`), params: [], body: "job" },
+  {
+    name: "jobs.list",
+    method: "GET",
+    path: new RegExp(`${V2}/projects/[^/]+/jobs$`),
+    params: ["allUsers", "maxResults", "minCreationTime", "maxCreationTime", "pageToken", "projection", "stateFilter", "parentJobId", "fields"],
+    enums: { projection: ["MINIMAL", "FULL"], stateFilter: ["DONE", "PENDING", "RUNNING"] },
+  },
+  { name: "jobs.get", method: "GET", path: new RegExp(`${V2}/projects/[^/]+/jobs/[^/]+$`), params: ["location", "fields"] },
+  { name: "jobs.cancel", method: "POST", path: new RegExp(`${V2}/projects/[^/]+/jobs/[^/]+/cancel$`), params: ["location"], body: "empty" },
+  {
+    name: "jobs.getQueryResults",
+    method: "GET",
+    path: new RegExp(`${V2}/projects/[^/]+/queries/[^/]+$`),
+    params: ["startIndex", "pageToken", "maxResults", "timeoutMs", "location", "formatOptions.useInt64Timestamp", "fields"],
+  },
+  { name: "jobs.query", method: "POST", path: new RegExp(`${V2}/projects/[^/]+/queries$`), params: [], body: "query" },
+]
+
+const JOB = new Set(["kind", "etag", "id", "selfLink", "user_email", "configuration", "jobReference", "statistics", "status", "principal_subject", "jobCreationReason"])
+const JOB_REFERENCE = new Set(["projectId", "jobId", "location"])
+const JOB_CONFIGURATION = new Set(["jobType", "query", "load", "copy", "extract", "dryRun", "jobTimeoutMs", "labels", "reservation"])
+const JOB_QUERY = new Set([
+  "query", "destinationTable", "tableDefinitions", "userDefinedFunctionResources", "createDisposition", "writeDisposition",
+  "defaultDataset", "priority", "preserveNulls", "allowLargeResults", "useQueryCache", "flattenResults", "maximumBillingTier",
+  "maximumBytesBilled", "useLegacySql", "parameterMode", "queryParameters", "schemaUpdateOptions", "timePartitioning",
+  "rangePartitioning", "clustering", "destinationEncryptionConfiguration", "scriptOptions", "connectionProperties",
+  "createSession", "secureContext", "systemVariables",
+])
+const QUERY_REQUEST = new Set([
+  "kind", "query", "maxResults", "defaultDataset", "timeoutMs", "destinationEncryptionConfiguration", "dryRun", "preserveNulls",
+  "useQueryCache", "useLegacySql", "parameterMode", "queryParameters", "location", "formatOptions", "connectionProperties",
+  "labels", "maximumBytesBilled", "requestId", "createSession", "jobCreationMode", "queryResultsFormat", "secureContext",
+  "jobTimeoutMs", "reservation", "arrowSerializationOptions",
+])
+const FORMAT_OPTIONS = new Set(["useInt64Timestamp"])
+
+function bodyViolation(kind: Operation["body"], body: unknown): string | undefined {
+  if (kind === undefined || kind === "none") return undefined
+  if (kind === "empty") return body === undefined ? undefined : "Google's request body must be empty"
+  if (!isObject(body)) return "a JSON body is required"
+  if (kind === "permissions") return unknownKeys(body, new Set(["permissions"]), "TestIamPermissionsRequest")
+  if (kind === "query") {
+    const problem = unknownKeys(body, QUERY_REQUEST, "QueryRequest")
+    if (problem !== undefined) return problem
+    if (body.formatOptions !== undefined) return unknownKeys(body.formatOptions, FORMAT_OPTIONS, "DataFormatOptions")
+    return undefined
+  }
+  const top = unknownKeys(body, JOB, "Job")
+  if (top !== undefined) return top
+  const reference = body.jobReference
+  if (reference !== undefined) {
+    const problem = unknownKeys(reference, JOB_REFERENCE, "JobReference")
+    if (problem !== undefined) return problem
+    const location = isObject(reference) ? reference.location : undefined
+    if (typeof location === "string" && location === "") return "Google refuses an empty JobReference.location"
+  }
+  const configuration = body.configuration
+  if (configuration === undefined) return undefined
+  const field = unknownKeys(configuration, JOB_CONFIGURATION, "JobConfiguration")
+  if (field !== undefined) return field
+  const query = isObject(configuration) ? configuration.query : undefined
+  return query === undefined ? undefined : unknownKeys(query, JOB_QUERY, "JobConfigurationQuery")
+}
+
+function unknownKeys(value: unknown, allowed: ReadonlySet<string>, resource: string): string | undefined {
+  if (!isObject(value)) return `${resource} must be an object`
+  const unknown = Object.keys(value).filter((key) => !allowed.has(key))
+  return unknown.length > 0 ? `${resource} has no field ${unknown.map((key) => `"${key}"`).join(", ")}` : undefined
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

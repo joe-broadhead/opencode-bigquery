@@ -41,9 +41,11 @@ export interface QueryStatisticsWire {
   readonly ddlOperationPerformed?: string
 }
 
-/** The Job resource: `configuration`, `jobReference`, `statistics` and `status`. */
+/** The Job resource: `configuration`, `jobReference`, `statistics` and `status`; `state` on a jobs.list item. */
 export interface JobWire {
   readonly jobReference?: JobReferenceWire
+  /** jobs.list answers each item's state here as well as in `status` (…/jobs/list). */
+  readonly state?: string
   readonly configuration?: {
     readonly dryRun?: boolean
     readonly jobTimeoutMs?: string
@@ -127,7 +129,7 @@ export function toJobStatus(job: JobWire, fallback: JobReference & { readonly lo
     location: text(ref?.location) ?? fallback.location,
   }
   const query = job.statistics?.query
-  const state = jobState(job.status?.state)
+  const state = jobState(job.status?.state ?? job.state)
   const error = toErrorProto(job.status?.errorResult ?? job.status?.errors?.[0])
   const sql = job.configuration?.query?.query
   return {

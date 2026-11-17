@@ -6,18 +6,16 @@
       "kind": "bigquery#table",
       "etag": "invented-etag",
       "id": "invented-project:invented_dataset.invented_table",
+      "selfLink": "https://bigquery.googleapis.com/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_table",
       "tableReference": { "projectId": "invented-project", "datasetId": "invented_dataset", "tableId": "invented_table" },
-      "type": "TABLE",
-      "location": "EU",
-      "numBytes": "1048576",
-      "numRows": "1200",
-      "lastModifiedTime": "1763377200000",
+      "friendlyName": "Invented table",
       "description": "An invented table, not real data.",
+      "labels": { "env": "test" },
       "schema": {
         "fields": [
           { "name": "id", "type": "INT64", "mode": "REQUIRED", "description": "The key" },
           { "name": "name", "type": "STRING", "mode": "NULLABLE" },
-          { "name": "ssn", "type": "STRING", "mode": "NULLABLE", "policyTags": { "names": ["projects/invented-project/locations/eu/taxonomies/1/policyTags/2"] } },
+          { "name": "ssn", "type": "STRING", "mode": "NULLABLE", "policyTags": { "names": ["projects/invented-project/locations/eu/taxonomies/1/policyTags/1"] } },
           {
             "name": "address",
             "type": "RECORD",
@@ -30,8 +28,18 @@
           { "name": "tags", "type": "STRING", "mode": "REPEATED" }
         ]
       },
-      "timePartitioning": { "type": "DAY", "field": "day", "requirePartitionFilter": true },
-      "clustering": { "fields": ["name"] }
+      "timePartitioning": { "type": "DAY", "field": "day" },
+      "clustering": { "fields": ["name"] },
+      "requirePartitionFilter": true,
+      "numBytes": "1048576",
+      "numLongTermBytes": "0",
+      "numRows": "1200",
+      "creationTime": "1763377200000",
+      "expirationTime": "1794913200000",
+      "lastModifiedTime": "1763377200000",
+      "type": "TABLE",
+      "location": "EU",
+      "streamingBuffer": { "estimatedBytes": "0", "estimatedRows": "0", "oldestEntryTime": "1763377200000" }
     }
   }
 }

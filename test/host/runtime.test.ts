@@ -71,7 +71,7 @@ describe("the runtime in a host", () => {
     replay(fake, fixture("job-running"))
     const resultsPath = `/bigquery/v2/projects/${PROJECT}/queries/${JOB}`
     fake.answer({ method: "GET", path: resultsPath }, { status: 200, body: pending() })
-    fake.answer({ method: "POST", path: cancel }, { status: 200, body: { jobReference: { projectId: PROJECT, jobId: JOB, location: "EU" }, status: { state: "DONE" } } })
+    fake.answer({ method: "POST", path: cancel }, { status: 200, body: { kind: "bigquery#jobCancelResponse", job: { jobReference: { projectId: PROJECT, jobId: JOB, location: "EU" }, status: { state: "DONE" } } } })
     const host = await startHost({ fake })
     try {
       const bigquery = port()

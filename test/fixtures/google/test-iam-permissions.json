@@ -1,5 +1,5 @@
 {
-  "request": { "method": "POST", "path": "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_table/testIamPermissions" },
+  "request": { "method": "POST", "path": "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_table:testIamPermissions" },
   "response": {
     "status": 200,
     "body": { "permissions": ["bigquery.tables.getData"] }

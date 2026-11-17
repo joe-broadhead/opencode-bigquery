@@ -166,25 +166,51 @@ function float64(value: string | undefined): number | string | null {
 }
 
 /**
- * Google's seconds since the epoch (a double, in text) as ISO 8601 UTC. Its microseconds are kept when it sent any:
- * `2026-11-17T12:00:00.123456Z`.
+ * A TIMESTAMP as ISO 8601 UTC, exactly, over BigQuery's whole range (0001-01-01 to 9999-12-31).
+ *
+ * The port asks Google for `formatOptions.useInt64Timestamp`, so a TIMESTAMP arrives as the microseconds since the
+ * epoch in an int64 string ("1700000000123456"); that is read with BigInt. An answer still in the default form (seconds
+ * as a double in text, "1.700000000123456E9") is parsed as a decimal string, exponent and all, never through a double:
+ * a double has about 15.9 significant digits, so it rounds 9999-12-31T23:59:59.999999Z into year 10000 and loses
+ * microseconds decades away from 1970.
  */
 function timestamp(value: string | undefined): string | null {
   if (value === undefined) return null
-  const seconds = Number(value)
-  if (!Number.isFinite(seconds)) return value
-  // Split before multiplying: seconds × 1e6 passes 2^53 for any modern timestamp, and would lose the microseconds.
-  const whole = Math.floor(seconds)
-  let micros = Math.round((seconds - whole) * 1e6)
-  let millis = whole * 1000
-  if (micros >= 1e6) {
-    millis += 1000
-    micros = 0
-  }
-  const iso = new Date(millis).toISOString()
-  if (micros === 0) return iso
-  // Replace ISO's milliseconds with Google's microseconds: six digits, trailing zeros dropped.
-  return `${iso.slice(0, 19)}.${String(micros).padStart(6, "0").replace(/0+$/, "")}Z`
+  const micros = microsOf(value)
+  if (micros === undefined) return value
+  // Seconds and the microseconds inside the second, as integers: BigInt, so nothing rounds.
+  const seconds = micros / MICROS_PER_SECOND - (micros % MICROS_PER_SECOND < 0n ? 1n : 0n)
+  const fraction = micros - seconds * MICROS_PER_SECOND
+  const time = Number(seconds) * 1000
+  if (!Number.isFinite(time) || Math.abs(time) > MAX_DATE_MS) return value
+  const base = new Date(time).toISOString().slice(0, 19)
+  return fraction === 0n ? `${base}.000Z` : `${base}.${String(fraction).padStart(6, "0").replace(/0+$/, "")}Z`
+}
+
+const MICROS_PER_SECOND = 1_000_000n
+const MAX_DATE_MS = 8.64e15
+
+/** Microseconds since the epoch from Google's text, or undefined when it is not a number this version reads. */
+function microsOf(value: string): bigint | undefined {
+  const text = value.trim()
+  // useInt64Timestamp: an integer of microseconds.
+  if (/^[-+]?\d+$/.test(text)) return BigInt(text)
+  // The default form: seconds, possibly fractional and in scientific notation.
+  const match = /^([-+]?)(\d+)(?:\.(\d*))?(?:[eE]([-+]?\d+))?$/.exec(text)
+  if (!match) return undefined
+  const fraction = match[3] ?? ""
+  const exponent = Number(match[4] ?? "0")
+  if (!Number.isSafeInteger(exponent)) return undefined
+  const digits = BigInt(`${match[2]}${fraction}`)
+  // seconds = digits × 10^(exponent − fraction.length); microseconds = seconds × 10^6
+  const scale = exponent - fraction.length + 6
+  const magnitude = scale >= 0 ? digits * 10n ** BigInt(scale) : roundedDiv(digits, 10n ** BigInt(-scale))
+  return match[1] === "-" ? -magnitude : magnitude
+}
+
+/** Integer division, half away from zero, on a magnitude. */
+function roundedDiv(value: bigint, by: bigint): bigint {
+  return (value + by / 2n) / by
 }
 
 /** `[2026-01-01, 2026-12-31)` as `{ start, end }`; `UNBOUNDED` becomes null. */
@@ -196,9 +222,14 @@ function range(value: string | undefined): { start: string | null; end: string |
   return { start: bound(match[1]!), end: bound(match[2]!) }
 }
 
-/** Cuts to `length` characters, the last one an ellipsis when anything was dropped. */
+/** Cuts to `length` characters, the last one an ellipsis when anything was dropped, never through a surrogate pair. */
 function clip(value: string, length: number): string {
-  return value.length > length ? `${value.slice(0, length - 1)}…` : value
+  if (value.length <= length) return value
+  let end = length - 1
+  const code = value.charCodeAt(end - 1)
+  // A high surrogate at the cut would leave half a character; drop it too.
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1
+  return `${value.slice(0, end)}…`
 }
 
 /** Control characters other than tab and newline, escaped as JSON would (design §5.6). */

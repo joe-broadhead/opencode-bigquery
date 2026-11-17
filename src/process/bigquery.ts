@@ -6,8 +6,9 @@
  *   `jobs.query` is used only for a saved query's bind-time estimate (…/jobs/query);
  * - a duplicate job id is a 409 with reason `duplicate` (https://cloud.google.com/bigquery/docs/error-messages), and
  *   is joined with `jobs.get` (…/jobs/get) so a transport retry never runs a query twice;
- * - results are `jobs.getQueryResults` (…/jobs/getQueryResults);
- * - a stop aborts the request and cancels the job this call started, with `jobs.cancel` (…/jobs/cancel);
+ * - results are `jobs.getQueryResults` (…/jobs/getQueryResults), asked for exact microsecond timestamps;
+ * - a stop aborts the request and cancels the job this call started, with `jobs.cancel` (…/jobs/cancel), which answers
+ *   `{ kind, job }`;
  * - the reads the guards and listings need are `jobs.get`/`jobs.list`, `projects.list`, `datasets.list`,
  *   `tables.list`/`tables.get`, `tabledata.list`, `routines.list`/`routines.get`, `rowAccessPolicies.list` and
  *   `tables.testIamPermissions`.
@@ -16,17 +17,17 @@
  * connection property. The request body is built from the fields of `QueryJobRequest` alone, so the read path cannot
  * become anything else by passing an object with extra keys.
  *
- * Google's own failure is reported as the plugin's code for it (`JOB_FAILED`, `BYTES_BILLED_LIMIT`, `JOB_TIMEOUT`,
- * `NOT_FOUND`, `PERMISSION_DENIED`, `QUOTA_EXCEEDED`, `RATE_LIMITED`, `UNAVAILABLE`), with Google's words only in
- * `googleError`. The read path turns `JOB_FAILED` with reason `invalidQuery` into `SQL_INVALID` (package C), because
- * only it has the SQL's position to show.
+ * A job Google accepted and then failed is a **result**, not a transport failure: `run` and `getJob` answer its DONE
+ * `JobStatus`, with `error` (`status.errorResult`) and `totalBytesBilled`, so the read path can name the code and the
+ * ledger can count what it cost. Only an HTTP failure is thrown, and its code comes from Google's reason first
+ * (`bytesBilledLimitExceeded`, `timeout`, `rateLimitExceeded`, …), then from the status.
  */
 import { BigQueryError } from "../domain/errors.js"
 import type { Accuracy, DatasetReference, JobReference, QueryParameter, RoutineInfo, RoutineReference, TableInfo, TableReference } from "../domain/google.js"
 import { ident } from "../domain/identifiers.js"
 import type { Options } from "../options.js"
 import type { AuthPort, BigQueryPort, DryRunAnswer, JobStatus, ListInput, Page, QueryJobRequest, ResultPage, RunRequest } from "../ports.js"
-import { cancelled, createHttp, jobFailure, type Http } from "./http.js"
+import { cancelled, createHttp, delay, isRecord, jobFailure, text, type Http } from "./http.js"
 import {
   itemsOf,
   pageTokenOf,
@@ -54,6 +55,9 @@ export interface BigQueryDeps {
 /** A run's id: `oc_<uuid>`, ours, so a retry and a duplicate join name the same job (design §5.1 step 9). */
 const RUN_ID = /^oc_[A-Za-z0-9_-]{1,1019}$/
 
+/** Exact TIMESTAMPs: microseconds since the epoch as an int64, not a double (design §7; DataFormatOptions). */
+const EXACT_TIMESTAMPS = { "formatOptions.useInt64Timestamp": "true" } as const
+
 /**
  * The transport takes no plugin option: the byte cap, the time limit and the labels arrive with each run, and job
  * concurrency (`maxConcurrentJobs`, design §6.2) is the read path's guard, because only it knows when a job's results
@@ -66,6 +70,9 @@ export function createBigQueryPort(deps: BigQueryDeps): BigQueryPort {
 
 /** Jobs this process started, so a stop cancels only its own call's job (design §8). */
 const REMEMBERED = 256
+
+/** Pages the policy list reads on its own while its pages are empty: an empty page with a token is not "no policy". */
+const POLICY_PAGES = 10
 
 class BigQueryRuntime implements BigQueryPort {
   private readonly http: Http
@@ -81,7 +88,7 @@ class BigQueryRuntime implements BigQueryPort {
       method: "POST",
       path: this.jobsPath(request.project),
       body: {
-        jobReference: { projectId: request.project, ...(request.location !== undefined ? { location: request.location } : {}) },
+        jobReference: { projectId: request.project, ...(request.location !== undefined && request.location !== "" ? { location: request.location } : {}) },
         configuration: { query: queryConfiguration(request), dryRun: true },
       },
       task: `the dry run in ${ident(request.project)}`,
@@ -89,7 +96,8 @@ class BigQueryRuntime implements BigQueryPort {
       idempotent: true,
     })
     // TODO(L8): a dry-run answer is expected to name the location it chose, in jobReference.location. When it does not,
-    // the run is sent without one and Google routes it by its datasets; live check L8 says whether that happens.
+    // the run is sent without one and Google infers it from the datasets: that is only safe for US/EU until L8 says
+    // whether real dry-run answers carry it (Google answers "Job not found" to a getQueryResults without a location).
     const location = job.jobReference?.location ?? request.location ?? ""
     const statistics = job.statistics?.query
     return { location, ...(statistics !== undefined ? { statistics: dryRunStatistics(statistics) } : {}) }
@@ -104,7 +112,7 @@ class BigQueryRuntime implements BigQueryPort {
         ...queryConfiguration(request),
         dryRun: true,
         maxResults: 0,
-        ...(request.location !== undefined ? { location: request.location } : {}),
+        ...locationOf(request.location),
       },
       task: `the estimate in ${ident(request.project)}`,
       signal,
@@ -158,16 +166,17 @@ class BigQueryRuntime implements BigQueryPort {
     } catch (error) {
       if (error instanceof BigQueryError && error.extras.googleError?.reason === "duplicate") {
         // Google already has this job: the first attempt of this same call reached it. Join it; never run it twice.
-        const joined = await this.getJob(request.account, ref, signal)
-        if (joined.state === "DONE" && joined.error !== undefined) throw jobFailure(joined.error, ident(request.jobId))
+        const joined = await this.joined(request.account, ref, signal)
+        this.remember(request.account, joined.ref)
         return joined
       }
       await this.stopped(request.account, ref, signal, error)
       this.forget(request.account, ref)
       throw error
     }
-    const status = toJobStatus(job, { projectId: request.project, jobId: request.jobId, location: request.location })
-    if (status.state === "DONE" && status.error !== undefined) throw jobFailure(status.error, ident(request.jobId))
+    const status = toJobStatus(job, { ...ref, location: ref.location ?? "" })
+    // The answer names the location Google actually used; Stop and every later call need that one, not the request's.
+    this.remember(request.account, status.ref)
     return status
   }
 
@@ -186,13 +195,19 @@ class BigQueryRuntime implements BigQueryPort {
           timeoutMs: page.timeoutMs,
           maxResults: Math.max(1, page.maxResults),
           ...(page.pageToken !== undefined ? { pageToken: page.pageToken } : {}),
-          ...(ref.location !== undefined ? { location: ref.location } : {}),
+          ...locationOf(ref.location),
+          ...EXACT_TIMESTAMPS,
         },
         task: `the results of ${ident(ref.jobId)}`,
         signal,
         idempotent: true,
+        deadlineMs: Math.min(page.timeoutMs + 60_000, 600_000),
       })
-      if (answer.jobComplete === true && Array.isArray(answer.errors) && answer.errors.length > 0) throw jobFailure(answer.errors[0], ident(ref.jobId))
+      // getQueryResults' `errors[]` are "the first errors or warnings … do not necessarily mean the job … was
+      // unsuccessful" (…/jobs/getQueryResults): only a complete page with no schema and no rows is a failure there.
+      const failed = answer.jobComplete === true && Array.isArray(answer.errors) && answer.errors.length > 0
+      const hasResult = answer.schema?.fields !== undefined || (Array.isArray(answer.rows) && answer.rows.length > 0)
+      if (failed && !hasResult) throw jobFailure(answer.errors![0], ident(ref.jobId))
       return toResultPage(answer)
     } catch (error) {
       await this.stopped(account, ref, signal, error)
@@ -205,7 +220,7 @@ class BigQueryRuntime implements BigQueryPort {
       account,
       method: "GET",
       path: this.jobsPath(ref.projectId, ref.jobId),
-      query: ref.location !== undefined ? { location: ref.location } : undefined,
+      query: locationOf(ref.location),
       task: `the job ${ident(ref.jobId)}`,
       signal,
       idempotent: true,
@@ -217,15 +232,17 @@ class BigQueryRuntime implements BigQueryPort {
     input: ListInput & { readonly project: string; readonly stateFilter?: "done" | "pending" | "running"; readonly minCreationTime?: number; readonly maxCreationTime?: number },
     signal: AbortSignal,
   ): Promise<Page<JobStatus>> {
+    // A full-projection page carries each job's SQL; 100 keeps one page well under the 10 MiB an answer may be (L-9).
+    const maxResults = input.maxResults ?? 100
     const body = await this.http.request<unknown>({
       account: input.account,
       method: "GET",
       path: this.jobsPath(input.project),
       query: {
         allUsers: "false",
-        projection: "full",
-        ...(input.stateFilter !== undefined ? { stateFilter: input.stateFilter } : {}),
-        ...(input.maxResults !== undefined ? { maxResults: input.maxResults } : {}),
+        projection: "FULL",
+        maxResults,
+        ...(input.stateFilter !== undefined ? { stateFilter: input.stateFilter.toUpperCase() } : {}),
         ...(input.pageToken !== undefined ? { pageToken: input.pageToken } : {}),
         ...(input.minCreationTime !== undefined ? { minCreationTime: input.minCreationTime } : {}),
         ...(input.maxCreationTime !== undefined ? { maxCreationTime: input.maxCreationTime } : {}),
@@ -238,25 +255,28 @@ class BigQueryRuntime implements BigQueryPort {
       items: itemsOf(body, "jobs").flatMap((item) => {
         const job = item as JobWire
         const jobId = job.jobReference?.jobId
-        return typeof jobId === "string" ? [toJobStatus(job, { projectId: input.project, jobId, location: "" })] : []
+        return typeof jobId === "string" ? [toJobStatus(job, { projectId: input.project, jobId, location: job.jobReference?.location ?? "" })] : []
       }),
-      ...(pageTokenOf(body) !== undefined ? { nextPageToken: pageTokenOf(body)! } : {}),
+      ...page(body),
     }
   }
 
   async cancel(account: string, ref: JobReference, signal: AbortSignal): Promise<JobStatus> {
-    const job = await this.http.request<JobWire>({
+    const answer = await this.http.request<{ readonly job?: JobWire }>({
       account,
       method: "POST",
       path: `${this.jobsPath(ref.projectId, ref.jobId)}/cancel`,
-      query: ref.location !== undefined ? { location: ref.location } : undefined,
-      body: {},
+      query: locationOf(ref.location),
       task: `the job ${ident(ref.jobId)}`,
       signal,
       idempotent: true,
+      // A stop must not queue behind eight long-polls (L-2).
+      priority: true,
+      deadlineMs: 30_000,
     })
+    if (!isRecord(answer) || !isRecord(answer.job)) throw new BigQueryError("UNAVAILABLE", `Google's cancel answer for ${ident(ref.jobId)} carried no job`)
     this.forget(account, ref)
-    return toJobStatus(job, { projectId: ref.projectId, jobId: ref.jobId, location: ref.location ?? "" })
+    return toJobStatus(answer.job as JobWire, { projectId: ref.projectId, jobId: ref.jobId, location: ref.location ?? "" })
   }
 
   async listProjects(input: ListInput, signal: AbortSignal): Promise<Page<{ readonly projectId: string; readonly friendlyName?: string }>> {
@@ -334,6 +354,7 @@ class BigQueryRuntime implements BigQueryPort {
         maxResults: page.maxResults,
         ...(page.selectedFields.length > 0 ? { selectedFields: page.selectedFields.join(",") } : {}),
         ...(page.pageToken !== undefined ? { pageToken: page.pageToken } : {}),
+        ...EXACT_TIMESTAMPS,
       },
       task: `the rows of ${ident(ref.projectId)}.${ident(ref.datasetId)}.${ident(ref.tableId)}`,
       signal,
@@ -347,7 +368,12 @@ class BigQueryRuntime implements BigQueryPort {
       account: input.account,
       method: "GET",
       path: `${this.datasetPath(input.dataset)}/routines`,
-      query: { ...(input.maxResults !== undefined ? { maxResults: input.maxResults } : {}), ...(input.pageToken !== undefined ? { pageToken: input.pageToken } : {}) },
+      query: {
+        ...(input.maxResults !== undefined ? { maxResults: input.maxResults } : {}),
+        ...(input.pageToken !== undefined ? { pageToken: input.pageToken } : {}),
+        // Without a readMask, routines.list answers no definitionBody and no arguments (…/routines/list).
+        readMask: "routineType,language,remoteFunctionOptions,definitionBody,arguments",
+      },
       task: `the routines of ${ident(input.dataset.projectId)}.${ident(input.dataset.datasetId)}`,
       signal,
       idempotent: true,
@@ -368,28 +394,40 @@ class BigQueryRuntime implements BigQueryPort {
   }
 
   async listRowAccessPolicies(account: string, ref: TableReference, signal: AbortSignal): Promise<Page<{ readonly policyId: string }>> {
-    const body = await this.http.request<unknown>({
-      account,
-      method: "GET",
-      path: `${this.tablePath(ref)}/rowAccessPolicies`,
-      task: `the row access policies of ${ident(ref.projectId)}.${ident(ref.datasetId)}.${ident(ref.tableId)}`,
-      signal,
-      idempotent: true,
-    })
-    return {
-      items: itemsOf(body, "rowAccessPolicies").flatMap((item) => {
-        const policyId = (item as { readonly policyId?: unknown }).policyId
-        return typeof policyId === "string" ? [{ policyId }] : []
-      }),
-      ...page(body),
+    const policies: { policyId: string }[] = []
+    let pageToken: string | undefined
+    for (let page = 0; page < POLICY_PAGES; page += 1) {
+      const body = await this.http.request<unknown>({
+        account,
+        method: "GET",
+        path: `${this.tablePath(ref)}/rowAccessPolicies`,
+        query: { pageSize: 1000, ...(pageToken !== undefined ? { pageToken } : {}) },
+        task: `the row access policies of ${ident(ref.projectId)}.${ident(ref.datasetId)}.${ident(ref.tableId)}`,
+        signal,
+        idempotent: true,
+      })
+      for (const item of itemsOf(body, "rowAccessPolicies")) {
+        // The RowAccessPolicy resource nests the id: `rowAccessPolicyReference.policyId` (…/rowAccessPolicies). Any entry
+        // is a policy, even one this version cannot read, so a policy list never silently reads as "no policy": the cap
+        // rule treats any entry as row-secured (design §5.1 step 7.1).
+        const reference = isRecord(item) && isRecord(item.rowAccessPolicyReference) ? item.rowAccessPolicyReference : undefined
+        policies.push({ policyId: text(reference?.policyId) ?? "" })
+      }
+      const token = pageTokenOf(body)
+      if (token === undefined || policies.length > 0) return { items: policies, ...(token !== undefined ? { nextPageToken: token } : {}) }
+      // An empty page with a token is not "no policy": read on, so the answer is definitive before it says none.
+      pageToken = token
     }
+    // Still empty after the page bound: the list could not be read completely, so fail closed (a probe error is a plan).
+    throw new BigQueryError("UNAVAILABLE", `Google's policy list for ${ident(ref.projectId)}.${ident(ref.datasetId)}.${ident(ref.tableId)} did not finish within ${POLICY_PAGES} pages`)
   }
 
   async testTablePermissions(account: string, ref: TableReference, permissions: readonly string[], signal: AbortSignal): Promise<readonly string[]> {
     const body = await this.http.request<unknown>({
       account,
       method: "POST",
-      path: `${this.tablePath(ref)}/testIamPermissions`,
+      // The method is a colon, not a path segment (…/tables/testIamPermissions).
+      path: `${this.tablePath(ref)}:testIamPermissions`,
       body: { permissions },
       task: `the permissions on ${ident(ref.projectId)}.${ident(ref.datasetId)}.${ident(ref.tableId)}`,
       signal,
@@ -425,15 +463,52 @@ class BigQueryRuntime implements BigQueryPort {
 
   /**
    * A stop cancels the job this call started (design §8). Google's cancel is a separate request, so it cannot carry the
-   * stopped call's signal: it gets its own short one, and its own failure never replaces the `CANCELLED` answer.
+   * stopped call's signal: it gets its own short one and a priority lane, and its failure never replaces the
+   * `CANCELLED` answer.
+   *
+   * A stop that lands while `jobs.insert` is still unanswered has no location to cancel with. The insert may have
+   * created the job, so the port asks `jobs.get` for the location Google gave it and cancels again; if the job is not
+   * visible, the cancel stays unpinned and may not reach a single-region job (allowed to fail visibly, ruling L8).
    */
   private async stopped(account: string, ref: JobReference, signal: AbortSignal, error: unknown): Promise<void> {
     if (!signal.aborted || !(error instanceof BigQueryError) || error.code !== "CANCELLED") return
     if (!this.started.has(this.key(account, ref))) return
+    if (await this.cancelQuietly(account, ref)) return
+    const located = await this.locate(account, ref)
+    if (located !== undefined) await this.cancelQuietly(account, located)
+  }
+
+  private async cancelQuietly(account: string, ref: JobReference): Promise<boolean> {
     try {
-      await this.cancel(account, ref, AbortSignal.timeout(10_000))
+      await this.cancel(account, ref, AbortSignal.timeout(15_000))
+      return true
     } catch {
-      // The answer is the stop, not the cancel's failure: what it billed is unknown either way.
+      return false
+    }
+  }
+
+  /** The job as Google knows it, for a stop or a 409 that had no location; two short tries, then give up. */
+  private async locate(account: string, ref: JobReference): Promise<JobReference | undefined> {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const status = await this.getJob(account, ref, AbortSignal.timeout(10_000))
+        return status.ref
+      } catch {
+        if (attempt === 2) return undefined
+        await delay(200, AbortSignal.timeout(1_000)).catch(() => undefined)
+      }
+    }
+    return undefined
+  }
+
+  /** The 409 join: `jobs.get`, tolerating Google's window where the job exists but is not visible yet (L-8, P14). */
+  private async joined(account: string, ref: JobReference, signal: AbortSignal): Promise<JobStatus> {
+    try {
+      return await this.getJob(account, ref, signal)
+    } catch (error) {
+      if (!(error instanceof BigQueryError) || error.code !== "NOT_FOUND") throw error
+      await delay(200, signal)
+      return this.getJob(account, ref, signal)
     }
   }
 
@@ -451,6 +526,11 @@ class BigQueryRuntime implements BigQueryPort {
   private key(account: string, ref: JobReference): string {
     return `${account}\u0000${ref.projectId}\u0000${ref.jobId}`
   }
+}
+
+/** `location` as a query parameter, or nothing: Google refuses an empty one, and a missing one loses a single-region job. */
+function locationOf(location: string | undefined): { readonly location?: string } {
+  return location === undefined || location === "" ? {} : { location }
 }
 
 /**
@@ -474,7 +554,11 @@ function parameterMode(parameters: readonly QueryParameter[]): "NAMED" | "POSITI
   return parameters.some((parameter) => parameter.name !== undefined) ? "NAMED" : "POSITIONAL"
 }
 
-/** The dry run's `statistics.query`, field by field, so nothing else from Google's answer reaches the guards. */
+/**
+ * The dry run's `statistics.query`, field by field, so nothing else from Google's answer reaches the guards. A
+ * referenced list with an entry that carries no ids is not a list the fence can check: the dry run is incomplete
+ * (design §5.1 steps 6 and 7), never a list to guess at.
+ */
 function dryRunStatistics(statistics: {
   readonly statementType?: string
   readonly totalBytesProcessed?: string
@@ -489,20 +573,40 @@ function dryRunStatistics(statistics: {
     ...(statistics.statementType !== undefined ? { statementType: statistics.statementType } : {}),
     ...(statistics.totalBytesProcessed !== undefined ? { totalBytesProcessed: statistics.totalBytesProcessed } : {}),
     ...(accuracy(statistics.totalBytesProcessedAccuracy) !== undefined ? { totalBytesProcessedAccuracy: accuracy(statistics.totalBytesProcessedAccuracy)! } : {}),
-    ...(Array.isArray(statistics.referencedTables) ? { referencedTables: statistics.referencedTables } : {}),
-    ...(Array.isArray(statistics.referencedLogicalViews) ? { referencedLogicalViews: statistics.referencedLogicalViews } : {}),
-    ...(Array.isArray(statistics.referencedRoutines) ? { referencedRoutines: statistics.referencedRoutines } : {}),
-    ...(Array.isArray(statistics.referencedPropertyGraphs)
-      ? {
-          referencedPropertyGraphs: statistics.referencedPropertyGraphs.flatMap((graph) =>
-            graph.projectId !== undefined && graph.datasetId !== undefined && graph.propertyGraphId !== undefined
-              ? [{ projectId: graph.projectId, datasetId: graph.datasetId, propertyGraphId: graph.propertyGraphId }]
-              : [],
-          ),
-        }
-      : {}),
+    ...(statistics.referencedTables !== undefined ? { referencedTables: references(statistics.referencedTables, "table") } : {}),
+    ...(statistics.referencedLogicalViews !== undefined ? { referencedLogicalViews: references(statistics.referencedLogicalViews, "view") } : {}),
+    ...(statistics.referencedRoutines !== undefined ? { referencedRoutines: routines(statistics.referencedRoutines) } : {}),
+    ...(statistics.referencedPropertyGraphs !== undefined ? { referencedPropertyGraphs: graphs(statistics.referencedPropertyGraphs) } : {}),
     ...(statistics.schema !== undefined ? { schema: statistics.schema as NonNullable<DryRunAnswer["statistics"]>["schema"] } : {}),
   }
+}
+
+/** A table or view list the fence can use: every entry names its project, dataset and table. */
+function references<T extends Partial<TableReference>>(list: readonly T[], what: string): readonly TableReference[] {
+  return list.map((entry) => {
+    if (typeof entry.projectId !== "string" || typeof entry.datasetId !== "string" || typeof entry.tableId !== "string" || entry.projectId === "" || entry.datasetId === "" || entry.tableId === "") {
+      throw new BigQueryError("DRY_RUN_INCOMPLETE", `The dry run's referenced ${what} list has an entry with no project, dataset or table`)
+    }
+    return { projectId: entry.projectId, datasetId: entry.datasetId, tableId: entry.tableId }
+  })
+}
+
+function routines(list: readonly Partial<RoutineReference>[]): readonly RoutineReference[] {
+  return list.map((entry) => {
+    if (typeof entry.projectId !== "string" || typeof entry.datasetId !== "string" || typeof entry.routineId !== "string" || entry.projectId === "" || entry.datasetId === "" || entry.routineId === "") {
+      throw new BigQueryError("DRY_RUN_INCOMPLETE", "The dry run's referenced routine list has an entry with no project, dataset or routine")
+    }
+    return { projectId: entry.projectId, datasetId: entry.datasetId, routineId: entry.routineId }
+  })
+}
+
+function graphs(list: readonly { readonly projectId?: string; readonly datasetId?: string; readonly propertyGraphId?: string }[]): readonly { readonly projectId: string; readonly datasetId: string; readonly propertyGraphId: string }[] {
+  return list.map((entry) => {
+    if (typeof entry.projectId !== "string" || typeof entry.datasetId !== "string" || typeof entry.propertyGraphId !== "string" || entry.projectId === "" || entry.datasetId === "" || entry.propertyGraphId === "") {
+      throw new BigQueryError("DRY_RUN_INCOMPLETE", "The dry run's referenced property graph list has an entry with no project, dataset or graph")
+    }
+    return { projectId: entry.projectId, datasetId: entry.datasetId, propertyGraphId: entry.propertyGraphId }
+  })
 }
 
 function accuracy(value: string | undefined): Accuracy | undefined {

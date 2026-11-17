@@ -5,6 +5,7 @@
     "body": {
       "kind": "bigquery#job",
       "etag": "invented-etag",
+      "id": "invented-project:EU.oc_00000000-0000-4000-8000-000000000001",
       "jobReference": { "projectId": "invented-project", "jobId": "oc_00000000-0000-4000-8000-000000000001", "location": "EU" },
       "configuration": {
         "jobType": "QUERY",
@@ -25,8 +26,7 @@
           "cacheHit": false,
           "referencedTables": [{ "projectId": "invented-project", "datasetId": "invented_dataset", "tableId": "invented_table" }],
           "referencedLogicalViews": [],
-          "referencedRoutines": [],
-          "numDmlAffectedRows": "0"
+          "referencedRoutines": []
         }
       },
       "status": { "state": "DONE" }

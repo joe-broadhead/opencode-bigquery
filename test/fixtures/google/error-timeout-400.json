@@ -1,0 +1,14 @@
+{
+  "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/queries/oc_00000000-0000-4000-8000-000000000003" },
+  "response": {
+    "status": 400,
+    "body": {
+      "error": {
+        "code": 400,
+        "message": "Query execution has timed out",
+        "errors": [{ "message": "Query execution has timed out", "domain": "global", "reason": "timeout", "location": "query" }],
+        "status": "INVALID_ARGUMENT"
+      }
+    }
+  }
+}

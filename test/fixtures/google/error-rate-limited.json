@@ -1,14 +1,14 @@
 {
   "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/queries/oc_00000000-0000-4000-8000-000000000009" },
   "response": {
-    "status": 429,
+    "status": 403,
     "headers": { "retry-after": "2" },
     "body": {
       "error": {
-        "code": 429,
-        "message": "Exceeded rate limits: too many table update operations for this table.",
-        "errors": [{ "message": "Exceeded rate limits: too many table update operations for this table.", "domain": "global", "reason": "rateLimitExceeded" }],
-        "status": "RESOURCE_EXHAUSTED"
+        "code": 403,
+        "message": "Exceeded rate limits: too many concurrent queries for this project",
+        "errors": [{ "message": "Exceeded rate limits: too many concurrent queries for this project", "domain": "usageLimits", "reason": "rateLimitExceeded" }],
+        "status": "PERMISSION_DENIED"
       }
     }
   }

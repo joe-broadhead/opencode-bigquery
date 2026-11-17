@@ -4,6 +4,7 @@
     "status": 200,
     "body": {
       "kind": "bigquery#job",
+      "id": "invented-project:EU.oc_00000000-0000-4000-8000-000000000002",
       "jobReference": { "projectId": "invented-project", "jobId": "oc_00000000-0000-4000-8000-000000000002", "location": "EU" },
       "configuration": { "jobType": "QUERY", "query": { "query": "SELECT * FROM `invented-project.invented_dataset.invented_big_table`", "useLegacySql": false } },
       "statistics": {

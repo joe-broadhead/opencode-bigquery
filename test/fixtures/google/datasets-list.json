@@ -10,16 +10,19 @@
           "kind": "bigquery#dataset",
           "id": "invented-project:invented_dataset",
           "datasetReference": { "projectId": "invented-project", "datasetId": "invented_dataset" },
+          "friendlyName": "Invented dataset",
           "location": "EU"
         },
         {
           "kind": "bigquery#dataset",
           "id": "invented-project:invented_second",
           "datasetReference": { "projectId": "invented-project", "datasetId": "invented_second" },
+          "friendlyName": "Invented second dataset",
           "location": "EU"
         }
       ],
-      "nextPageToken": "invented-dataset-page-2"
+      "nextPageToken": "invented-dataset-page-2",
+      "totalItems": 2
     }
   }
 }

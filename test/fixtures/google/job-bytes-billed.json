@@ -4,8 +4,9 @@
     "status": 200,
     "body": {
       "kind": "bigquery#job",
+      "id": "invented-project:EU.oc_00000000-0000-4000-8000-000000000002",
       "jobReference": { "projectId": "invented-project", "jobId": "oc_00000000-0000-4000-8000-000000000002", "location": "EU" },
-      "configuration": { "jobType": "QUERY", "query": { "query": "SELECT * FROM `invented-project.invented_dataset.invented_big_table`", "useLegacySql": false, "maximumBytesBilled": "1024" } },
+      "configuration": { "jobType": "QUERY", "query": { "query": "SELECT * FROM `invented-project.invented_dataset.invented_big_table`", "useLegacySql": false, "maximumBytesBilled": "1024" }, "jobTimeoutMs": "600000" },
       "statistics": {
         "creationTime": "1763377200000",
         "endTime": "1763377200500",
