@@ -22,12 +22,23 @@ const cancel = `${jobs}/${JOB}/cancel`
 
 const fixture = (name: string): Fixture => ({ name, ...(JSON.parse(readFileSync(new URL(`../fixtures/google/${name}.json`, import.meta.url), "utf8")) as Omit<Fixture, "name">) })
 
-/** The real port, with the host's routed `fetch` and the Day 0 fake account. */
-function port() {
+/**
+ * The real port, with a loopback `fetch` to this test's fake. The host tests of other packages share the harness's one
+ * global fetch router, and a fake installed by another file can win a race; Bun's own fetch cannot be replaced, so this
+ * test always reaches its own fake. The host itself still runs every request it makes through the harness router.
+ */
+function port(fake: { readonly origin: string }) {
+  const send: typeof globalThis.fetch = typeof Bun === "undefined" ? globalThis.fetch : (Bun.fetch as unknown as typeof globalThis.fetch)
+  const loopback = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init)
+    const url = new URL(request.url)
+    if (url.hostname !== "bigquery.googleapis.com" && url.hostname !== "oauth2.googleapis.com") return Promise.reject(new Error(`blocked ${url.origin}`))
+    return send(new Request(`${fake.origin}${url.pathname}${url.search}`, request), { redirect: "error" })
+  }) as typeof globalThis.fetch
   return createBigQueryPort({
     options: loadOptions({}),
     auth: new FakeAuth({ default: { mode: "interactive", record: readRecord(), refreshScopes: [] } }),
-    fetch: globalThis.fetch,
+    fetch: loopback,
     retry: { tries: 3, baseDelayMs: 1, maxDelayMs: 5, jitter: false },
   })
 }
@@ -42,7 +53,7 @@ describe("the runtime in a host", () => {
     replay(fake, fixture("results-page-1"))
     const host = await startHost({ fake })
     try {
-      const bigquery = port()
+      const bigquery = port(fake)
       const signal = new AbortController().signal
       const dry = await bigquery.dryRun(query, signal)
       const run = await bigquery.run({ ...query, jobId: JOB, location: dry.location, maximumBytesBilled: 10 * 2 ** 30, jobTimeoutMs: 600_000, labels: { oc_plugin: "bigquery", oc_tool: "bigquery_query" } }, signal)
@@ -74,7 +85,7 @@ describe("the runtime in a host", () => {
     fake.answer({ method: "POST", path: cancel }, { status: 200, body: { kind: "bigquery#jobCancelResponse", job: { jobReference: { projectId: PROJECT, jobId: JOB, location: "EU" }, status: { state: "DONE" } } } })
     const host = await startHost({ fake })
     try {
-      const bigquery = port()
+      const bigquery = port(fake)
       const run = await bigquery.run({ ...query, jobId: JOB, location: "EU", maximumBytesBilled: 10 * 2 ** 30, jobTimeoutMs: 600_000, labels: { oc_plugin: "bigquery" } }, new AbortController().signal)
       const controller = new AbortController()
 
