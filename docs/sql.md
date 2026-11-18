@@ -185,9 +185,9 @@ no size or row count, so use `bigquery_list({ details: true })` or worked exampl
 
 ## Ten worked examples
 
-All ten read Google's public datasets, whose schemas are documented with the datasets
-([BigQuery public datasets](https://cloud.google.com/bigquery/public-data)). Each bills at least the 10 MB minimum on
-your billing project, so estimate first.
+Nine read Google's public datasets, whose schemas are documented with the datasets
+([BigQuery public datasets](https://cloud.google.com/bigquery/public-data)); the ninth reads your own project's. Each
+bills at least the 10 MB minimum on your billing project, so estimate first.
 
 1. **Count words in a play.**
 
@@ -266,14 +266,18 @@ your billing project, so estimate first.
    FROM (SELECT 1 FROM `bigquery-public-data.samples.shakespeare` TABLESAMPLE SYSTEM (1 PERCENT))
    ```
 
-9. **A dataset's tables by size.** `TABLE_STORAGE` is region-qualified
-   ([TABLE_STORAGE](https://cloud.google.com/bigquery/docs/information-schema-table-storage)), and the plugin refuses a
-   region-qualified reference while the account has an allow fence; without one, this reads the US multi-region.
+9. **Your own project's tables by size.** `TABLE_STORAGE` is region-qualified
+   ([TABLE_STORAGE](https://cloud.google.com/bigquery/docs/information-schema-table-storage)). With no project before
+   `region-us`, it reads your **billing project**, needs BigQuery Metadata Viewer on that project, and the plugin refuses
+   a region-qualified reference while the account has an allow fence. For a public dataset's table sizes, use
+   `bigquery_list({ project: "bigquery-public-data", dataset: "crypto_bitcoin", details: true })`, which reads the
+   dataset's tables with `tables.get`.
 
    ```sql
+   -- Reads the billing project (`region-us` with no project before it); BigQuery Metadata Viewer is needed on it.
    SELECT table_name, total_rows, total_logical_bytes, total_physical_bytes
    FROM `region-us`.INFORMATION_SCHEMA.TABLE_STORAGE
-   WHERE table_schema = 'crypto_bitcoin'
+   WHERE table_schema = 'my_dataset'
    ORDER BY total_logical_bytes DESC
    LIMIT 20
    ```
