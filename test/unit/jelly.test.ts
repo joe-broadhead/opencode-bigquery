@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { ACTIONS, ASKS } from "../../src/domain/actions.js"
+import { ACTIONS, ASKS, PERMISSION_ONLY } from "../../src/domain/actions.js"
 import { ALL_SCOPES, DISCLOSURE } from "../../src/domain/levels.js"
 import { loadOptions } from "../../src/options.js"
 import { defaultRules } from "../../src/permissions.js"
@@ -23,16 +23,18 @@ const jelly = manifest.jelly as Declaration & { asks: string[]; rpc: unknown[]; 
 
 describe("the jelly declaration", () => {
   it("follows the plugin authors' standard, with the effects the plugin's own default rules give", () => {
-    const registered = toolSpecs(loadOptions({}), fakePorts()).map((spec) => spec.action)
+    // `bigquery.read` is asserted by the source reads, not registered as a tool of its own.
+    const registered = [...toolSpecs(loadOptions({}), fakePorts()).map((spec) => spec.action), ...PERMISSION_ONLY.map((entry) => entry.action)]
     expect(declarationProblems(ROOT, { effectOf: effectFromRules(defaultRules()), actionPermissions: true, registered })).toEqual([])
   })
 
   it("declares exactly the action table: every action the plugin asserts, each read read-only", () => {
-    expect(jelly.tools).toEqual(
-      ACTIONS.map((entry) => ({ name: entry.action, permission: entry.action, effect: "allow", readOnly: entry.readOnly, ...(entry.note ? { note: entry.note } : {}) })),
-    )
-    expect(jelly.tools).toHaveLength(21)
-    expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(14)
+    expect(jelly.tools).toEqual([
+      ...ACTIONS.map((entry) => ({ name: entry.action, permission: entry.action, effect: "allow", readOnly: entry.readOnly, ...(entry.note ? { note: entry.note } : {}) })),
+      ...PERMISSION_ONLY.map((entry) => ({ name: entry.action, permission: entry.action, effect: "allow", readOnly: true, note: entry.note })),
+    ])
+    expect(jelly.tools).toHaveLength(22)
+    expect(jelly.tools.filter((tool) => tool.readOnly)).toHaveLength(15)
   })
 
   it("declares the one run-time ask, the uncapped read, and says on the card what Jelly does with it at each level", () => {

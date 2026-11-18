@@ -97,6 +97,10 @@ export interface ResultPage {
 export interface Page<T> {
   readonly items: readonly T[]
   readonly nextPageToken?: string
+  /** jobs.list's `unreachable[]`: locations Google skipped, so the page is not complete for them. */
+  readonly unreachable?: readonly string[]
+  /** jobs.list: the answer's HTTP `Date`, Google's clock when it answered, in ms (to the second). */
+  readonly serverTime?: number
 }
 
 export interface ListInput {

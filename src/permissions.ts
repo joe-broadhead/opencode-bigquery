@@ -3,7 +3,7 @@
 // rules and saved approvals all still win. The `access` option generates the block from the action table.
 import type { Plugin } from "@opencode/plugin"
 import { type Access, NAMESPACE } from "./constants.js"
-import { ASKS, CHANGE_ACTIONS, READ_ACTIONS } from "./domain/actions.js"
+import { ASKS, CHANGE_ACTIONS, PERMISSION_ONLY, READ_ACTIONS } from "./domain/actions.js"
 import { errorText } from "./domain/errors.js"
 import { reasonOf } from "./redact.js"
 
@@ -29,7 +29,7 @@ export function uncappedReadEffect(access: Access): Effect {
 
 /**
  * Broad first, narrow last, because the last matching rule wins: `bigquery.*` at the change effect, so an action the
- * plugin does not declare is treated like a change; every read allowed; every change at the change effect; and the
+ * plugin does not declare is treated like a change; every read allowed, the permission-only `bigquery.read` too; every change at the change effect; and the
  * run-time ask `bigquery.uncapped_read`. All from the one action table (src/domain/actions.ts).
  */
 export function defaultRules(access: Access = "all"): Rule[] {
@@ -37,6 +37,7 @@ export function defaultRules(access: Access = "all"): Rule[] {
   return [
     { action: NAMESPACE_ACTION, resource: "*", effect: change },
     ...READ_ACTIONS.map((entry): Rule => ({ action: entry.action, resource: "*", effect: "allow" })),
+    ...PERMISSION_ONLY.map((entry): Rule => ({ action: entry.action, resource: "*", effect: "allow" })),
     ...CHANGE_ACTIONS.map((entry): Rule => ({ action: entry.action, resource: "*", effect: change })),
     { action: ASKS.uncappedRead, resource: "*", effect: uncappedReadEffect(access) },
   ]

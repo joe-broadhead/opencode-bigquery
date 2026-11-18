@@ -30,6 +30,10 @@ describe("default rules", () => {
     expect(ACCESS_VALUES.map((access) => effectOf([BASE, ...defaultRules(access)], ASKS.uncappedRead))).toEqual(["ask", "ask", "deny"])
   })
 
+  it("allow the source contract's per-operation read, bigquery.read, at every access, on any operation", () => {
+    for (const access of ACCESS_VALUES) expect(effectOf([BASE, ...defaultRules(access)], "bigquery.read", "work:bigquery.jobs.list"), access).toBe("allow")
+  })
+
   it("treat an action the plugin does not declare like a change, at every access", () => {
     for (const access of ACCESS_VALUES) expect(effectOf([BASE, ...defaultRules(access)], "bigquery.never_seen"), access).toBe(changeEffect(access))
   })

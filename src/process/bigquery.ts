@@ -234,6 +234,7 @@ class BigQueryRuntime implements BigQueryPort {
   ): Promise<Page<JobStatus>> {
     // A full-projection page carries each job's SQL; 100 keeps one page well under the 10 MiB an answer may be (L-9).
     const maxResults = input.maxResults ?? 100
+    let serverTime: number | undefined
     const body = await this.http.request<unknown>({
       account: input.account,
       method: "GET",
@@ -250,6 +251,11 @@ class BigQueryRuntime implements BigQueryPort {
       task: `the jobs of ${ident(input.project)}`,
       signal,
       idempotent: true,
+      // The answer's HTTP Date is Google's clock when it answered (RFC 9110 §6.6.1), to the second.
+      onHeaders: (headers) => {
+        const parsed = Date.parse(headers.get("date") ?? "")
+        if (Number.isFinite(parsed) && parsed > 0) serverTime = parsed
+      },
     })
     return {
       items: itemsOf(body, "jobs").flatMap((item) => {
@@ -258,6 +264,8 @@ class BigQueryRuntime implements BigQueryPort {
         return typeof jobId === "string" ? [toJobStatus(job, { projectId: input.project, jobId, location: job.jobReference?.location ?? "" })] : []
       }),
       ...page(body),
+      ...unreachableOf(body),
+      ...(serverTime !== undefined ? { serverTime } : {}),
     }
   }
 
@@ -652,6 +660,17 @@ function accuracy(value: string | undefined): Accuracy | undefined {
 }
 
 /** A list answer's page token, when Google sent one. */
+/**
+ * jobs.list's `unreachable[]`, "a list of skipped locations that were unreachable"
+ * (https://cloud.google.com/bigquery/docs/reference/rest/v2/jobs/list): a listing that skipped one is not complete for
+ * it. Each entry is Google's text, so only a location-shaped one is kept as written; anything else is "unknown".
+ */
+function unreachableOf(body: unknown): { readonly unreachable?: readonly string[] } {
+  const raw = (body as { unreachable?: unknown } | null)?.unreachable
+  if (!Array.isArray(raw) || raw.length === 0) return {}
+  return { unreachable: raw.slice(0, 64).map((entry) => (typeof entry === "string" && /^[A-Za-z0-9-]{1,64}$/.test(entry) ? entry : "unknown")) }
+}
+
 function page(body: unknown): { readonly nextPageToken?: string } {
   const token = pageTokenOf(body)
   return token === undefined ? {} : { nextPageToken: token }

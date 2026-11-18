@@ -9,9 +9,10 @@ tile, not Google's logo.
 
 ## Tools and permissions
 
-21 tools are declared (14 read-only): the nineteen tools, and two reads that are tools RPC methods only, `bigquery.saved_list`
+22 tools are declared (15 read-only): the nineteen tools, two reads that are tools RPC methods only, `bigquery.saved_list`
 (a source's set-up lists the saved queries with their SQL and estimates) and `bigquery.probe` (names the signed-in
-account for sources). Every action the plugin asserts is declared, and every read is `readOnly`, so at Read only every
+account for sources), and one permission-only read, `bigquery.read`, which a source's read asserts on each BigQuery
+operation it uses, as the source contract requires, so turning one operation off is honoured. Every action the plugin asserts is declared, and every read is `readOnly`, so at Read only every
 read runs, the scripts' and sources' reads included. A read left out of the list would be off at Read only.
 `test/unit/jelly.test.ts` keeps `jelly.tools` equal to the action table (`src/domain/actions.ts`), and checks each
 declared effect against the plugin's own default rules.

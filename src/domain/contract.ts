@@ -318,6 +318,8 @@ export const SavedReadInput = z.strictObject({
   source: z.literal("saved").optional(),
   account,
   name: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  /** The confirmed scope a consumer's read sends (`{ queries }`): the read refuses a name outside it. */
+  scope: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional(),
 })
 /** The source contract's `table` snapshot; package E fills it. */
 export const SavedReadOutput = z.looseObject({ state: z.enum(STATES).optional() })
@@ -353,14 +355,20 @@ export const CommitOutput = result({
 })
 
 /** The bind step's list of saved queries, with their SQL (untrusted, cut to 500) and estimates. */
-export const SavedListInput = z.strictObject({ account })
-export const SavedListOutput = result({
+export const SavedListInput = z.strictObject({ account, source: z.enum(["saved", "bigquery.saved"]).optional() })
+/**
+ * The suggest answer the contract's bind step reads (`{ options: [{ id, label }] }`), with the queries' SQL and
+ * estimates; like the other source methods it carries no tool envelope, so `state` is only on a model's refusal.
+ */
+export const SavedListOutput = z.looseObject({
+  state: z.enum(STATES).optional(),
+  options: z.array(z.object({ id: z.string(), label: z.string().optional() })).optional(),
   queries: z.array(z.object({ name: z.string(), sql: z.string().max(500), bytes: z.number().optional(), costUsd: z.number().optional() })).optional(),
   trust: untrusted.optional(),
 })
 
 /** The source probe: the identity, with no BigQuery call. */
-export const ProbeInput = z.strictObject({ account })
+export const ProbeInput = z.strictObject({ account, source: z.enum(["jobs", "saved", "bigquery.jobs", "bigquery.saved"]).optional() })
 export const ProbeOutput = z.looseObject({ owner: z.object({ id: z.string(), label: z.string().optional() }).optional(), verified: z.literal(false).optional() })
 
 /** Every entry's schemas, by name (src/domain/actions.ts). */
