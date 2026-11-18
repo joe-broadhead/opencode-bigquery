@@ -25,7 +25,7 @@ export const NAMESPACE_DESCRIPTION: Readonly<Record<Access, string>> = {
 /** The OpenCode versions the plugin starts on. Equals `opencode.host` in package.json. */
 export const SUPPORTED_HOST = ">=2.2.3 <2.4.0"
 /** The OpenCode releases every check runs on: the one list. Status calls only these "tested". */
-export const TESTED_HOSTS: readonly string[] = ["2.2.3", "2.2.4", "2.2.5", "2.2.6", "2.2.7", "2.3.0"]
+export const TESTED_HOSTS: readonly string[] = ["2.2.3", "2.2.4", "2.2.5", "2.2.6", "2.2.7", "2.3.0", "2.3.1", "2.3.2"]
 
 /**
  * Whether this build ships the Read and write level (design §3.1, Q12). A build constant, never an option: if live check

@@ -131,6 +131,16 @@ class BigQueryAuth implements AuthPort {
     return found?.email && found.verified ? { email: found.email, verified: true } : { verified: false }
   }
 
+  /** From the active credential's sign-in record, as `bindingOf` reads it; no Google call, and no refusal. */
+  async binding(alias: string, signal: AbortSignal): Promise<"bound" | "unbound" | undefined> {
+    stopped(signal)
+    if (this.account(alias).mode !== "interactive") return undefined
+    const host = this.state.host
+    if (!host) return undefined
+    const active = await activeCredential(host, integrationIdFor(alias))
+    return active ? readSignIn(active.credential.metadata)?.record.binding : undefined
+  }
+
   // ── Interactive ────────────────────────────────────────────────────────
 
   private async tokenInteractive(alias: string, signal: AbortSignal): Promise<AccessToken> {

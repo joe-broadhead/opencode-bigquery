@@ -377,7 +377,12 @@ export const ProbeOutput = z.looseObject({ owner: z.object({ id: z.string(), lab
 
 /** Every entry's schemas, by name (src/domain/actions.ts). */
 export const SCHEMAS = {
-  status: { input: StatusInput, output: StatusOutput, description: "Accounts, levels, caps and spend, and what to do next. No Google call unless include asks." },
+  status: {
+    input: StatusInput,
+    output: StatusOutput,
+    description:
+      "Accounts, levels, caps and spend, and what to do next. No BigQuery call unless include asks, apart from the free IAM check once after a Read sign-in; reading a Read and write account's level may refresh its token once per process.",
+  },
   list: { input: ListInput, output: ListOutput, description: "Projects; a project's datasets; a dataset's tables or routines. Free." },
   table: { input: TableInput, output: TableOutput, description: "A table's schema, partitioning, clustering, size and view SQL; an optional small sample. Free unless partitions." },
   search: { input: SearchInput, output: SearchOutput, description: "Find tables and columns by name or description. Billed at least 10 MB per view read." },

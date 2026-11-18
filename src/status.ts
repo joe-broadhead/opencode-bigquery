@@ -6,6 +6,7 @@ import { errorText } from "./domain/errors.js"
 import { isTestedHost } from "./host-version.js"
 import { defaultRules, unguardedAgents } from "./permissions.js"
 import { AGENT_STEP, BigQueryRpc, formatStatus, NOTHING_TO_DO, type SkillPath, type Status, STATUS_COMMAND } from "./rpc.js"
+import type { Options } from "./options.js"
 import { PLUGIN_VERSION } from "./version.js"
 
 const UNAVAILABLE = errorText("STATUS_UNAVAILABLE", `${DISPLAY_NAME} status is unavailable right now`)
@@ -22,6 +23,8 @@ export type StatusDeps = {
   readonly tools: () => Status["tools"]
   readonly skills: readonly SkillPath[]
   readonly problems: () => readonly string[]
+  /** The options the plugin parsed in setup, the same object: status never parses them again. No ports: status makes no request. */
+  readonly options?: Options
 }
 
 export async function computeStatus(ctx: StatusContext, deps: StatusDeps): Promise<Status> {
