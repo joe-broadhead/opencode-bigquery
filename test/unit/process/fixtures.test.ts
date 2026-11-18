@@ -28,6 +28,14 @@ const DOCS: Readonly<Record<string, { readonly page: string; readonly keys: read
   "test-iam-permissions": { page: "tables/testIamPermissions", keys: ["permissions"] },
   "dry-run-select": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
   "dry-run-partitions": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-create-table": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-alter-rename": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-drop-row-access-policy": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-create-function": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-create-schema": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-grant-table": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-grant-view": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
+  "dry-run-grant-schema": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
   "job-running": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
   "job-done": { page: "Job", keys: ["kind", "etag", "id", "jobReference", "configuration", "statistics", "status"] },
   "job-bytes-billed": { page: "Job", keys: ["kind", "id", "jobReference", "configuration", "statistics", "status"] },
@@ -56,11 +64,25 @@ const KEYS = {
   jobReference: ["projectId", "jobId", "location"],
   jobConfiguration: ["jobType", "query", "load", "copy", "extract", "dryRun", "jobTimeoutMs", "labels", "reservation"],
   jobQuery: ["query", "destinationTable", "tableDefinitions", "userDefinedFunctionResources", "createDisposition", "writeDisposition", "defaultDataset", "priority", "preserveNulls", "allowLargeResults", "useQueryCache", "flattenResults", "maximumBillingTier", "maximumBytesBilled", "useLegacySql", "parameterMode", "queryParameters", "schemaUpdateOptions", "timePartitioning", "rangePartitioning", "clustering", "destinationEncryptionConfiguration", "scriptOptions", "connectionProperties", "createSession", "secureContext", "systemVariables"],
-  queryStatistics: ["queryPlan", "estimatedBytesProcessed", "timeline", "totalPartitionsProcessed", "totalBytesProcessed", "totalBytesProcessedAccuracy", "totalBytesBilled", "billingTier", "totalSlotMs", "reservationUsage", "cacheHit", "referencedTables", "referencedRoutines", "referencedLogicalViews", "referencedPropertyGraphs", "schema", "numDmlAffectedRows", "dmlStats", "undeclaredQueryParameters", "statementType", "ddlOperationPerformed", "ddlTargetTable", "ddlDestinationTable", "totalServicesSkuSlotMs"],
+  queryStatistics: ["queryPlan", "estimatedBytesProcessed", "timeline", "totalPartitionsProcessed", "totalBytesProcessed", "totalBytesProcessedAccuracy", "totalBytesBilled", "billingTier", "totalSlotMs", "reservationUsage", "cacheHit", "referencedTables", "referencedRoutines", "referencedLogicalViews", "referencedPropertyGraphs", "schema", "numDmlAffectedRows", "dmlStats", "undeclaredQueryParameters", "statementType", "ddlOperationPerformed", "ddlTargetTable", "ddlDestinationTable", "ddlTargetRowAccessPolicy", "ddlAffectedRowAccessPolicyCount", "ddlTargetRoutine", "ddlTargetDataset", "dclTargetTable", "dclTargetView", "dclTargetDataset", "totalServicesSkuSlotMs"],
   tableField: ["name", "type", "mode", "fields", "description", "policyTags", "dataPolicies", "dataPolicyList", "maxLength", "precision", "scale", "roundingMode", "collation", "defaultValueExpression", "rangeElementType", "generatedColumn"],
   error: ["code", "message", "errors", "status"],
   // ErrorProto plus the fields Google's error envelope carries: domain, locationType and extendedHelp.
   errorProto: ["reason", "location", "debugInfo", "message", "domain", "locationType", "extendedHelp"],
+}
+
+/** One dry run per change field Google names in JobStatistics2 (https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#jobstatistics2). */
+const CHANGE_FIXTURES = ["dry-run-create-table", "dry-run-alter-rename", "dry-run-drop-row-access-policy", "dry-run-create-function", "dry-run-create-schema", "dry-run-grant-table", "dry-run-grant-view", "dry-run-grant-schema"]
+/** Each change field's documented type: a TableReference, RoutineReference, DatasetReference or RowAccessPolicyReference. */
+const CHANGE_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  ddlTargetTable: ["datasetId", "projectId", "tableId"],
+  ddlDestinationTable: ["datasetId", "projectId", "tableId"],
+  dclTargetTable: ["datasetId", "projectId", "tableId"],
+  dclTargetView: ["datasetId", "projectId", "tableId"],
+  ddlTargetRowAccessPolicy: ["datasetId", "policyId", "projectId", "tableId"],
+  ddlTargetRoutine: ["datasetId", "projectId", "routineId"],
+  ddlTargetDataset: ["datasetId", "projectId"],
+  dclTargetDataset: ["datasetId", "projectId"],
 }
 
 const body = (name: string) => byName.get(name)!.response.body as Record<string, unknown>
@@ -93,7 +115,7 @@ describe("fixtures", () => {
   })
 
   test("a Job is the Job resource, field by field", () => {
-    for (const name of ["dry-run-select", "dry-run-partitions", "job-running", "job-done", "job-bytes-billed", "job-bytes-billed-get", "job-timeout"]) {
+    for (const name of ["dry-run-select", "dry-run-partitions", ...CHANGE_FIXTURES, "job-running", "job-done", "job-bytes-billed", "job-bytes-billed-get", "job-timeout"]) {
       const job = body(name)
       expectWithin(keysOf(job.jobReference), KEYS.jobReference, `${name} jobReference`)
       expectWithin(keysOf(job.configuration), KEYS.jobConfiguration, `${name} configuration`)
@@ -101,6 +123,22 @@ describe("fixtures", () => {
       expectWithin(keysOf((job.statistics as Record<string, unknown>).query), KEYS.queryStatistics, `${name} statistics.query`)
       expectWithin(keysOf(job.status), ["state", "errorResult", "errors"], `${name} status`)
     }
+  })
+
+  test("a change's dry run names its target exactly in the documented reference type", () => {
+    const seen = new Set<string>()
+    for (const name of CHANGE_FIXTURES) {
+      const statistics = (body(name).statistics as Record<string, Record<string, unknown>>).query!
+      for (const [field, value] of Object.entries(statistics)) {
+        if (field.startsWith("ddlTarget") || field.startsWith("dclTarget") || field === "ddlDestinationTable") {
+          expect(keysOf(value), `${name} ${field}`).toEqual(CHANGE_FIELDS[field])
+          for (const id of Object.values(value as Record<string, unknown>)) expect(typeof id, `${name} ${field}`).toBe("string")
+          seen.add(field)
+        }
+      }
+      if (statistics.numDmlAffectedRows !== undefined) expect(statistics.numDmlAffectedRows).toMatch(/^\d+$/)
+    }
+    expect([...seen].sort()).toEqual(Object.keys(CHANGE_FIELDS).sort())
   })
 
   test("a result page: documented keys, documented schema fields, exact TIMESTAMPs", () => {

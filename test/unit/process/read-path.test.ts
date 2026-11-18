@@ -198,3 +198,53 @@ function maybeLocation(fake: Parameters<typeof replay>[0], location: string | un
     },
   )
 }
+
+describe("a change's dry run (contract request from package D)", () => {
+  const cases: readonly [string, Record<string, unknown>][] = [
+    ["dry-run-create-table", { statementType: "CREATE_TABLE", ddlTargetTable: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_table" } }],
+    ["dry-run-alter-rename", { ddlTargetTable: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_table" }, ddlDestinationTable: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_renamed" } }],
+    ["dry-run-drop-row-access-policy", { ddlTargetRowAccessPolicy: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_table", policyId: "invented_policy" } }],
+    ["dry-run-create-function", { ddlTargetRoutine: { projectId: "invented-project", datasetId: "invented_dataset", routineId: "invented_routine" } }],
+    ["dry-run-create-schema", { ddlTargetDataset: { projectId: "invented-project", datasetId: "invented_dataset" } }],
+    ["dry-run-grant-table", { dclTargetTable: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_table" } }],
+    ["dry-run-grant-view", { dclTargetView: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_view" } }],
+    ["dry-run-grant-schema", { dclTargetDataset: { projectId: "invented-project", datasetId: "invented_dataset" } }],
+  ]
+
+  test.each(cases)("%s: the target passes through as Google names it", async (name, expected) => {
+    await withFake(async (fake) => {
+      replay(fake, fixture(name))
+      const { port } = portFor(fake)
+      const dry = await port.dryRun(queryRequest(), signal())
+      expect(dry.statistics).toMatchObject(expected)
+    })
+  })
+
+  test("ddlOperationPerformed and numDmlAffectedRows (an int64 string) pass through; anything else from Google does not", async () => {
+    await withFake(async (fake) => {
+      fake.answer({ method: "POST", path: jobsPath, dryRun: true }, {
+        status: 200,
+        body: { jobReference: { projectId: "invented-project", location: "EU" }, statistics: { query: { statementType: "INSERT", ddlOperationPerformed: "SKIP", numDmlAffectedRows: "3", dmlStats: { insertedRowCount: "3" } } }, status: { state: "DONE" } },
+      })
+      const { port } = portFor(fake)
+      const dry = await port.dryRun(queryRequest(), signal())
+      expect(dry.statistics).toEqual({ statementType: "INSERT", ddlOperationPerformed: "SKIP", numDmlAffectedRows: "3" })
+    })
+  })
+
+  test("a target that names no project, dataset or object is an incomplete dry run, never a guess", async () => {
+    for (const statistics of [
+      { statementType: "DROP_TABLE", ddlTargetTable: { projectId: "invented-project", datasetId: "invented_dataset" } },
+      { statementType: "CREATE_SCHEMA", ddlTargetDataset: { projectId: "invented-project" } },
+      { statementType: "DROP_ROW_ACCESS_POLICY", ddlTargetRowAccessPolicy: { projectId: "invented-project", datasetId: "invented_dataset", tableId: "invented_table" } },
+      { statementType: "GRANT_ON_VIEW", dclTargetView: { projectId: "", datasetId: "invented_dataset", tableId: "invented_view" } },
+    ]) {
+      await withFake(async (fake) => {
+        fake.answer({ method: "POST", path: jobsPath, dryRun: true }, { status: 200, body: { jobReference: { projectId: "invented-project", location: "EU" }, statistics: { query: statistics }, status: { state: "DONE" } } })
+        const { port } = portFor(fake)
+        const refusal = await port.dryRun(queryRequest(), signal()).catch((error: unknown) => error)
+        expect((refusal as BigQueryError).code, statistics.statementType).toBe("DRY_RUN_INCOMPLETE")
+      })
+    }
+  })
+})

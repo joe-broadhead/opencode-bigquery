@@ -74,6 +74,21 @@ export interface DryRunStatistics {
   readonly referencedRoutines?: readonly RoutineReference[]
   readonly referencedPropertyGraphs?: readonly { readonly projectId: string; readonly datasetId: string; readonly propertyGraphId: string }[]
   readonly schema?: { readonly fields?: readonly SchemaField[] }
+  // What a change names, from JobStatistics2 (https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#jobstatistics2,
+  // read 2026-11-18). Google fills each only for some statement types: `ddlTargetTable` for CREATE/DROP TABLE/VIEW and
+  // DROP ALL ROW ACCESS POLICIES, `ddlDestinationTable` for ALTER TABLE RENAME TO, `ddlTargetDataset` for SCHEMA
+  // statements, `ddlTargetRoutine` for CREATE/DROP FUNCTION/PROCEDURE, `dclTarget*` for GRANT and REVOKE. An absent field
+  // is not "no target". `numDmlAffectedRows` is an int64, sent as a string.
+  readonly ddlOperationPerformed?: string
+  readonly ddlTargetTable?: TableReference
+  readonly ddlDestinationTable?: TableReference
+  readonly ddlTargetRowAccessPolicy?: { readonly projectId: string; readonly datasetId: string; readonly tableId: string; readonly policyId: string }
+  readonly ddlTargetRoutine?: RoutineReference
+  readonly ddlTargetDataset?: DatasetReference
+  readonly dclTargetTable?: TableReference
+  readonly dclTargetView?: TableReference
+  readonly dclTargetDataset?: DatasetReference
+  readonly numDmlAffectedRows?: string
 }
 
 /** Google's error object, as `error` in an answer or `status.errorResult` on a job. Its message is untrusted. */

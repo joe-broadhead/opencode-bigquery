@@ -370,6 +370,12 @@ export const ErrorCode = {
     state: "refused",
     owner: "D",
   },
+  ADMIN_DISABLED: {
+    meaning: "Admin statements are turned off by the plugin's admin option.",
+    next: "Ask the user to set admin.enabled to true.",
+    state: "refused",
+    owner: "D",
+  },
   ADMIN_REASON_REQUIRED: {
     meaning: "An admin plan was made without reason.",
     next: "Plan again with reason.",

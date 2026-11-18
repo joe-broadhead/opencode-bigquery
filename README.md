@@ -74,6 +74,7 @@ Every code the plugin raises, with its next step. `/bigquery-status` shows the p
 | `ACCOUNT_UNKNOWN` | The account alias is not configured. | Pass a configured alias; bigquery_status lists them. |
 | `ADC_REFUSED` | Application Default Credentials are refused in hosted Jelly unless allowAdcInHost is set. | Use an interactive account, or ask the host's owner to set allowAdcInHost. |
 | `ADC_UNAVAILABLE` | Application Default Credentials found nothing on this machine. | Set GOOGLE_APPLICATION_CREDENTIALS, or run the gcloud command the message names with the bigquery scope. |
+| `ADMIN_DISABLED` | Admin statements are turned off by the plugin's admin option. | Ask the user to set admin.enabled to true. |
 | `ADMIN_REASON_REQUIRED` | An admin plan was made without reason. | Plan again with reason. |
 | `API_DISABLED` | The BigQuery API is off in the project. | Ask the user to enable the BigQuery API in the Google Cloud console, wait a minute, and retry. |
 | `AUTH_CLIENT_REQUIRED` | No OAuth client is configured, none was entered in the form, and no earlier sign-in has one. | Enter a Desktop OAuth client in /connect, or set the oauthClient option. |
