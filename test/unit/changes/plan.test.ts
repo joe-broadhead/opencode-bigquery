@@ -256,6 +256,61 @@ describe("bigquery_plan: a change's target is checked, not assumed (review bigqu
     expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
   })
 
+  it("refuses a CLONE, COPY, EXPORT MODEL or EXPORT TABLE METADATA source outside the fence (R-1)", async () => {
+    const cases: [string, string, Record<string, unknown>][] = [
+      ["CREATE_TABLE", "CREATE TABLE `invented-proj.sales.copy` CLONE `invented-proj.hr.people`", { statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("copy") }],
+      ["CREATE_SNAPSHOT_TABLE", "CREATE SNAPSHOT TABLE `invented-proj.sales.snap` CLONE `invented-proj.hr.people`", { statementType: "CREATE_SNAPSHOT_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("snap") }],
+      ["CREATE_TABLE", "CREATE TABLE `invented-proj.sales.copy2` COPY `invented-proj.hr.people`", { statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("copy2") }],
+      ["EXPORT_MODEL", "EXPORT MODEL `invented-proj.hr.m` OPTIONS (uri = 'gs://invented/x')", { statementType: "EXPORT_MODEL", referencedTables: [], totalBytesProcessed: "0" }],
+      ["EXPORT_METADATA", "EXPORT TABLE METADATA FROM `invented-proj.hr.people`", { statementType: "EXPORT_METADATA", referencedTables: [], totalBytesProcessed: "0" }],
+    ]
+    for (const [statementType, sql, fields] of cases) {
+      const h = planHarness({ dryRuns: [{ statistics: statistics(fields as never) }] }, readOnly(), FENCED)
+      const { output } = await runTool(h, "plan", { sql })
+      expect(output, statementType).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+      expect(h.ports.plans.list(), statementType).toEqual([])
+    }
+  })
+
+  it("allows a CLONE source inside the fence, and lists the destination and the source", async () => {
+    const h = planHarness(
+      { dryRuns: [{ statistics: statistics({ statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("copy") }) }] },
+      readOnly(),
+      FENCED,
+    )
+    const { output } = await runTool(h, "plan", { sql: "CREATE TABLE `invented-proj.sales.copy` CLONE `invented-proj.sales.other`" })
+    expect(output).toMatchObject({ state: "done", category: "write" })
+    expect((output.preview as { targets: string[] }).targets).toEqual(["invented-proj.sales.copy", "invented-proj.sales.other"])
+  })
+
+  it("refuses a script whose statement clones a table outside the fence", async () => {
+    const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }] }, readOnly(), FENCED)
+    scriptDryRunsBySql(h.bigquery, (sql) =>
+      sql.includes(";")
+        ? { statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }
+        : sql.includes("CLONE")
+          ? { statistics: statistics({ statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("copy") }) }
+          : { statistics: statistics({ statementType: "SELECT", referencedTables: [tableRef()], totalBytesProcessed: "1024" }) },
+    )
+    const { output } = await runTool(h, "plan", {
+      sql: "CREATE TABLE `invented-proj.sales.copy` CLONE `invented-proj.hr.people`; SELECT id FROM `invented-proj.sales.orders`",
+      maxBytes: "1GiB",
+    })
+    expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+  })
+
+  it("asserts a CLONE source as a resource, so a person's deny rule refuses the plan", async () => {
+    const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("copy") }) }] })
+    const denied = await runTool(h, "plan", { sql: "CREATE TABLE `invented-proj.sales.copy` CLONE `invented-proj.hr.people`" }, {
+      deny: (request) => request.resources.includes("default:table:invented-proj.hr.people"),
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(String(denied)).toContain("denied by the rules")
+    expect(h.ports.plans.list()).toEqual([])
+  })
+
   it("asserts a DDL target as a table resource, so a person's deny rule refuses the plan", async () => {
     const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "DROP_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef() }) }] })
     const denied = await runTool(h, "plan", { sql: "DROP TABLE `invented-proj.sales.orders`" }, {

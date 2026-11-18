@@ -61,7 +61,15 @@ export interface CallResult {
   readonly call: Call
 }
 
-export function call(options: { via?: Call["via"]; deny?: (request: AssertRequest) => boolean; sessionID?: string; agent?: string; signal?: AbortSignal } = {}): Call & { asserted: AssertRequest[] } {
+export function call(options: {
+  via?: Call["via"]
+  deny?: (request: AssertRequest) => boolean
+  /** Observe each assert while the prompt is live (the statement file exists then). */
+  observe?: (request: AssertRequest) => void
+  sessionID?: string
+  agent?: string
+  signal?: AbortSignal
+} = {}): Call & { asserted: AssertRequest[] } {
   const asserted: AssertRequest[] = []
   const value = {
     sessionID: options.sessionID ?? "ses_changes_1",
@@ -72,6 +80,7 @@ export function call(options: { via?: Call["via"]; deny?: (request: AssertReques
     via: options.via ?? "tool",
     async assert(request: AssertRequest) {
       asserted.push(request)
+      options.observe?.(request)
       if (options.deny?.(request)) throw new Error("denied by the rules")
     },
     asserted,

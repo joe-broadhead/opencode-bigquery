@@ -357,13 +357,25 @@ describe("the approval prompt shows what will change (review bigquery-8 M-1)", (
     try {
       const long = `INSERT INTO \`invented-proj.sales.orders\` (id) SELECT id FROM \`invented-proj.sales.other\` -- ${"y".repeat(25_000)}`
       const { h, planId } = await planned({ sql: long })
-      const { asserted } = await runTool(h, "write", { planId })
+      let saved: string | undefined
+      const { asserted } = await runTool(
+        h,
+        "write",
+        { planId },
+        {
+          observe: (request) => {
+            const file = request.metadata?.sqlFile
+            if (typeof file === "string") saved = readFileSync(file, "utf8")
+          },
+        },
+      )
       const metadata = asserted.find((request) => request.metadata?.planId === planId)!.metadata!
       expect(metadata.sqlMore).toBe(long.length - 20_000)
       expect(String(metadata.sql)).toContain(`+${long.length - 20_000} characters not shown`)
       const file = String(metadata.sqlFile)
-      expect(existsSync(file)).toBe(true)
-      expect(readFileSync(file, "utf8")).toBe(long)
+      expect(saved).toBe(long)
+      // The file lives only while the approval prompt does (LOW 2).
+      expect(existsSync(file)).toBe(false)
     } finally {
       if (before === undefined) delete process.env.XDG_STATE_HOME
       else process.env.XDG_STATE_HOME = before

@@ -2,7 +2,7 @@
 // ALTER, TRUNCATE, LOAD, CALL or CREATE MODEL, so this stricter-only reader supplies one for the fence and a person's
 // rules. It reads the tokens after the leading keywords, never a FROM clause, and refuses anything it cannot name.
 import { describe, expect, it } from "vitest"
-import { statementTarget } from "../../../src/changes/statement-target.js"
+import { statementSources, statementTarget } from "../../../src/changes/statement-target.js"
 
 const at = (sql: string, type = "INSERT") => statementTarget(sql, type, "invented-proj")
 
@@ -45,6 +45,24 @@ describe("the statement's own destination", () => {
 
   it("takes the destination from the INSERT's own head, not from its FROM clause", () => {
     expect(names("INSERT INTO `p.sales.orders` (id) SELECT id FROM `x.hidden.secret`")).toEqual({ kind: "table", project: "p", dataset: "sales", name: "orders" })
+  })
+
+  it("reads an EXPORT MODEL or EXPORT TABLE METADATA source", () => {
+    expect(at("EXPORT MODEL `p.sales.m` OPTIONS (uri = 'gs://invented/x')", "EXPORT_MODEL")).toMatchObject({ kind: "table", project: "p", dataset: "sales", name: "m" })
+    expect(at("EXPORT TABLE METADATA FROM `p.sales.orders`", "EXPORT_METADATA")).toMatchObject({ kind: "table", project: "p", dataset: "sales", name: "orders" })
+    expect(at("EXPORT DATA OPTIONS (uri = 'gs://invented/x.csv', format = 'CSV') AS SELECT 1", "EXPORT_DATA")).toBeUndefined()
+  })
+
+  it("reads a CLONE or COPY source, and only at parenthesis depth 0", () => {
+    expect(statementSources("CREATE TABLE `p.sales.copy` CLONE `p.hr.people`", "CREATE_TABLE", "invented-proj")).toMatchObject({
+      required: true,
+      targets: [{ kind: "table", project: "p", dataset: "hr", name: "people" }],
+    })
+    expect(statementSources("CREATE SNAPSHOT TABLE `p.sales.snap` CLONE `p.hr.people`", "CREATE_SNAPSHOT_TABLE", "invented-proj")).toMatchObject({ required: true })
+    expect(statementSources("CREATE TABLE `p.sales.copy2` COPY `p.hr.people`", "CREATE_TABLE", "invented-proj")).toMatchObject({ required: true })
+    expect(statementSources("CREATE TABLE `p.sales.copy` (id INT64)", "CREATE_TABLE", "invented-proj")).toEqual({ targets: [], required: false })
+    expect(statementSources("CREATE TABLE `p.sales.copy` (copy INT64)", "CREATE_TABLE", "invented-proj")).toEqual({ targets: [], required: false })
+    expect(statementSources("CREATE TABLE `p.sales.copy` CLONE `s`", "CREATE_TABLE", "invented-proj")).toEqual({ targets: [], required: true })
   })
 
   it("refuses what it cannot name, so a fence fails closed", () => {

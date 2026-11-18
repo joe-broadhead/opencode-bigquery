@@ -33,7 +33,7 @@ import type { Fence } from "../guards/settings.js"
 import { boundSentence } from "./bounds.js"
 import { scriptStatements, scriptSummary, type ScriptStatementInput } from "./scripts.js"
 import { changeTargets, type PlanTarget, targetSafe, targetsOf, targetsVerified, unionTargets, type Target } from "./statistics.js"
-import { statementTarget } from "./statement-target.js"
+import { statementSources, statementTarget } from "./statement-target.js"
 import type { Call } from "../tool-spec.js"
 
 /** The default job limit for a script: 300 s unless the caller passes a lower one (design §5.2). */
@@ -326,6 +326,13 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
         }
         continue
       }
+      if (statement.sourceMissing && hasFence(rc.settings.fence)) {
+        throw new BigQueryError(
+          "DATASET_FENCED",
+          "One of the script's statements copies or clones a table whose source cannot be verified against the account's dataset fence",
+          "Name the CLONE or COPY source with a project, dataset and table (backquoted where it needs to be), or ask the user to remove the fence.",
+        )
+      }
       checkTargets(rc.settings.fence, statement.type, statement.targets, "statement")
       assertTargetsFenced(rc.settings.fence, statement.references)
     }
@@ -334,8 +341,17 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
     references = unionTargets(...script.map((statement) => statement.references))
   } else {
     // A server-named DDL/DCL target is exact; a DML's `referencedTables` are its reads, not its destination, so the
-    // statement's own leading keywords name the destination when the server names none.
-    targets = changeTargets(wholeTargets, statementTarget(input.sql, prepared.statementType, prepared.project))
+    // statement's own leading keywords name the destination when the server names none. A CLONE/COPY source is a target
+    // too, and a fence refuses when it cannot be read (review #8 R-1).
+    const sources = statementSources(input.sql, prepared.statementType, prepared.project)
+    if (sources.required && sources.targets.length === 0 && hasFence(rc.settings.fence)) {
+      throw new BigQueryError(
+        "DATASET_FENCED",
+        "The source of the statement's CLONE or COPY clause cannot be verified against the account's dataset fence",
+        "Name the source with a project, dataset and table (backquoted where it needs to be), or ask the user to remove the fence.",
+      )
+    }
+    targets = changeTargets(wholeTargets, statementTarget(input.sql, prepared.statementType, prepared.project), sources.targets)
     checkTargets(rc.settings.fence, prepared.statementType, targets, "statement")
   }
   await assertChangeTargets({ call: context.call, account: context.account, action: actionOf("plan").action, via: "bigquery_plan", targets, ...(references.length > 0 ? { references } : {}) })

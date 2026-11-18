@@ -28,11 +28,11 @@ import { failureFor } from "../guards/jobfail.js"
 import { prepareRead, readContext, type PreparedRead } from "../guards/read.js"
 import { sessionHash } from "../guards/session.js"
 import type { JobStatus, RunRequest } from "../ports.js"
-import { approvalMetadata, scriptOf } from "./approval.js"
+import { approvalMetadata, removePlanText, scriptOf } from "./approval.js"
 import { assertTargetsFenced, checkTargets, classify, hasFence, targetResources, type Classification } from "./plan.js"
 import { scriptStatements, sameScript, type ScriptStatementInput } from "./scripts.js"
 import { changeTargets, sameTargets, type PlanTarget, targetsOf, unionTargets, type Target } from "./statistics.js"
-import { statementTarget } from "./statement-target.js"
+import { statementSources, statementTarget } from "./statement-target.js"
 
 export type CommitName = "write" | "export" | "share" | "delete" | "admin"
 
@@ -125,6 +125,13 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
           }
           continue
         }
+        if (statement.sourceMissing && hasFence(rc.settings.fence)) {
+          throw new BigQueryError(
+            "DATASET_FENCED",
+            "One of the script's statements copies or clones a table whose source cannot be verified against the account's dataset fence",
+            "Name the CLONE or COPY source with a project, dataset and table (backquoted where it needs to be), or ask the user to remove the fence.",
+          )
+        }
         checkTargets(rc.settings.fence, statement.type, statement.targets, "statement")
         assertTargetsFenced(rc.settings.fence, statement.references)
       }
@@ -137,7 +144,15 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
       // A DDL/DCL target is not in the referenced lists, so the fence is checked on it again here: the account's
       // `datasets` option may have changed between the plan and the commit. A DML's destination comes from its own
       // leading keywords; its referenced tables stay with package C's assert.
-      freshTargets = changeTargets(wholeTargets, statementTarget(plan.statement.sql, prepared.statementType, prepared.project))
+      const sources = statementSources(plan.statement.sql, prepared.statementType, prepared.project)
+      if (sources.required && sources.targets.length === 0 && hasFence(rc.settings.fence)) {
+        throw new BigQueryError(
+          "DATASET_FENCED",
+          "The source of the statement's CLONE or COPY clause cannot be verified against the account's dataset fence",
+          "Name the source with a project, dataset and table (backquoted where it needs to be), or ask the user to remove the fence.",
+        )
+      }
+      freshTargets = changeTargets(wholeTargets, statementTarget(plan.statement.sql, prepared.statementType, prepared.project), sources.targets)
       checkTargets(rc.settings.fence, prepared.statementType, freshTargets, "statement")
     }
     let classification: Classification
@@ -292,8 +307,10 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
     }
   } finally {
     // A refusal, a failed job or a changed plan expires the plan: it never comes back. A stopped or ambiguous call keeps
-    // it used, because the change may already have been applied.
+    // it used, because the change may already have been applied. The saved statement file lives only as long as the
+    // approval prompt (LOW 2).
     if (!consumed) context.ports.plans.release(plan.id)
+    removePlanText(plan.id)
   }
 }
 

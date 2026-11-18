@@ -77,6 +77,21 @@ export function statementTarget(sql: string, statementType: string, project: str
       kind = "routine"
       break
     }
+    case "EXPORT": {
+      // EXPORT MODEL <model>: the source model; EXPORT TABLE METADATA FROM <table>: the source table. EXPORT DATA's
+      // only object is a GCS URI, and its reads are in `referencedTables` (package C fences them), so it has no target.
+      if (word(tokens, at) === "MODEL") {
+        kind = "table"
+        at += 1
+        break
+      }
+      if (word(tokens, at) === "TABLE" && word(tokens, at + 1) === "METADATA" && word(tokens, at + 2) === "FROM") {
+        kind = "table"
+        at += 3
+        break
+      }
+      return undefined
+    }
     case "GRANT":
     case "REVOKE": {
       // GRANT … ON [TABLE|VIEW|SCHEMA] <path>; a project is not a dataset object.
@@ -129,6 +144,43 @@ function objectWords(tokens: readonly Token[], at: number): ObjectWords | undefi
 function word(tokens: readonly Token[], at: number): string | undefined {
   const token = tokens[at]
   return token !== undefined && (token.kind === "keyword" || token.kind === "identifier") ? token.value.toUpperCase() : undefined
+}
+
+/** A CLONE/COPY source, and whether the statement has one that must be determined for a fence to pass. */
+export interface StatementSources {
+  readonly targets: readonly Target[]
+  /** True when the statement has a CLONE or COPY clause: its source must be found, or a fence refuses. */
+  readonly required: boolean
+}
+
+/**
+ * The source of a `CREATE [SNAPSHOT] TABLE … CLONE|COPY <source>` clause (review bigquery-8 R-1). The destination is
+ * `statementTarget`'s; this is the object copied from, which the server does not name (the Job page does not say a CLONE
+ * or COPY source is in `referencedTables`) and which a fence must therefore see separately. Scans at parenthesis depth
+ * 0 only, so a column named `copy` in the schema is not a clause; a false positive only tightens (the source is absent
+ * and a fence refuses).
+ */
+export function statementSources(sql: string, statementType: string, project: string): StatementSources {
+  if (statementType !== "CREATE_TABLE" && statementType !== "CREATE_SNAPSHOT_TABLE") return { targets: [], required: false }
+  const lexed = createLexer().lex(sql)
+  if (!lexed.ok) return { targets: [], required: false }
+  const tokens = significantTokens(lexed.tokens)
+  let depth = 0
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!
+    if (token.kind === "punctuation" || token.kind === "operator") {
+      if (token.text === "(") depth += 1
+      else if (token.text === ")") depth = Math.max(0, depth - 1)
+      continue
+    }
+    if (depth !== 0) continue
+    const value = word(tokens, index)
+    if (value !== "CLONE" && value !== "COPY") continue
+    const parts = path(tokens, index + 1)
+    const target = parts !== undefined ? targetOf(parts, "table", project) : undefined
+    return { targets: target !== undefined ? [target] : [], required: true }
+  }
+  return { targets: [], required: false }
 }
 
 /** The dotted path after `at`: a quoted token's parts, or identifier/keyword parts separated by `.`. */

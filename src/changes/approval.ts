@@ -13,7 +13,7 @@
  *
  * Parameter values never enter this metadata: `planMetadata` already keeps them out, and only the SQL text is added.
  */
-import { mkdirSync, writeFileSync } from "node:fs"
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { BigQueryError } from "../domain/errors.js"
 import { type Plan, planMetadata } from "../domain/plans.js"
@@ -64,6 +64,15 @@ export function approvalMetadata(plan: Plan): Record<string, unknown> {
           },
         }
       : {}),
+  }
+}
+
+/** Remove a statement file once its approval is over (review bigquery-8 LOW 2); an absent file is fine. */
+export function removePlanText(planId: string): void {
+  try {
+    unlinkSync(join(stateDir(), "plans", `${planId}.sql`))
+  } catch {
+    // The file was never written (a short statement), or the state folder is unavailable; nothing to remove.
   }
 }
 

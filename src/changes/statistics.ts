@@ -44,9 +44,8 @@ const DML_TARGETS = new Set(["INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE_TA
 const NO_TARGET_TYPES = new Set([
   "SELECT",
   "ASSERT",
+  // EXPORT_MODEL and EXPORT_METADATA are NOT here: their source model/table is a target (review bigquery-8 R-1).
   "EXPORT_DATA",
-  "EXPORT_MODEL",
-  "EXPORT_METADATA",
   "CREATE_CAPACITY",
   "CREATE_RESERVATION",
   "CREATE_ASSIGNMENT",
@@ -106,11 +105,12 @@ export function sameTargets(left: readonly PlanTarget[], right: readonly PlanTar
  * (which a fence treats as unverified). The lexer's destination is never used to override a server-named target, and the
  * server's exact target always stays.
  */
-export function changeTargets(server: readonly Target[], destination: Target | undefined): Target[] {
+export function changeTargets(server: readonly Target[], destination: Target | undefined, sources: readonly Target[] = []): Target[] {
   const named = server.filter((target) => target.source === "ddl" || target.source === "dcl")
-  if (named.length > 0) return [...named]
-  if (destination !== undefined) return [destination]
-  return [...server]
+  const base = named.length > 0 ? named : destination !== undefined ? [destination] : server
+  // A CLONE/COPY clause's source is an object the statement reads to create the target; it is checked like a target
+  // (review bigquery-8 R-1), never used to allow anything.
+  return unionTargets(base, sources)
 }
 
 /** The objects a statement's dry run says it reads, as fence/assert objects; a property graph is left to package C. */

@@ -17,7 +17,7 @@ import type { Token } from "../domain/lexer-api.js"
 import { rethrowCallFailure } from "../guards/callerrors.js"
 import { createLexer, significantTokens } from "../guards/lexer.js"
 import { changeTargets, referencesOf, sameTargets, targetsOf, type Target } from "./statistics.js"
-import { statementTarget } from "./statement-target.js"
+import { statementSources, statementTarget } from "./statement-target.js"
 
 /** How many statements a script may have for its preview and its per-statement targets. */
 export const MAX_SCRIPT_STATEMENTS = 64
@@ -36,6 +36,8 @@ export interface ScriptStatementInput {
   readonly references: readonly Target[]
   /** False when the statement's own dry run failed or answered no statistics; a fence refuses then. */
   readonly determined: boolean
+  /** A CLONE/COPY clause whose source could not be read; a fence refuses the statement then (review #8 R-1). */
+  readonly sourceMissing: boolean
 }
 
 /** A script's own dry run, as the statement dry runs need it. */
@@ -123,23 +125,25 @@ async function oneStatement(input: ScriptInput, text: string): Promise<ScriptSta
     )
     const statistics = answer.statistics
     if (statistics === undefined || statistics.statementType === undefined) {
-      return { text, firstLine: line, type: "unknown", targets: [], references: [], determined: false }
+      return { text, firstLine: line, type: "unknown", targets: [], references: [], determined: false, sourceMissing: false }
     }
     const type = statistics.statementType
     const server = targetsOf(statistics, type, statistics.referencedTables ?? [])
+    const sources = statementSources(text, type, input.project)
     return {
       text,
       firstLine: line,
       type,
-      targets: changeTargets(server, statementTarget(text, type, input.project)),
+      targets: changeTargets(server, statementTarget(text, type, input.project), sources.targets),
       references: referencesOf(statistics),
       determined: true,
+      sourceMissing: sources.required && sources.targets.length === 0,
     }
   } catch (error) {
     // A call-wide failure (auth, quota, network) is the whole plan's; a statement's own SQL error is its own answer,
     // and the statement is undetermined (a fence refuses; without one the preview says so).
     rethrowCallFailure(error)
-    return { text, firstLine: line, type: "unknown", targets: [], references: [], determined: false }
+    return { text, firstLine: line, type: "unknown", targets: [], references: [], determined: false, sourceMissing: false }
   }
 }
 
@@ -157,6 +161,7 @@ export function sameScript(planned: readonly ScriptStatementInput[], fresh: read
     return (
       other !== undefined &&
       statement.type === other.type &&
+      statement.sourceMissing === other.sourceMissing &&
       sameTargets(statement.targets, other.targets) &&
       sameTargets(statement.references, other.references)
     )
