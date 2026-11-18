@@ -163,18 +163,21 @@ export function jobStatusOf(resource: Record<string, unknown>): JobStatus {
 
 /**
  * Teaches the fake BigQuery port to answer `jobs.list` from these resources, the way the real API does: the creation
- * window is inclusive, the order is newest first by creation time, `stateFilter` is DONE, and `pageToken` names the
- * offset. `pageSize` simulates a provider page smaller than `maxResults` (as Google may answer).
+ * window is inclusive, the order is newest first by creation time, `stateFilter` picks DONE, RUNNING or PENDING jobs
+ * (each fixture's `state`), and `pageToken` names the offset. test/unit/sources/sim.ts is the moving one. `pageSize` simulates a provider page smaller than `maxResults` (as Google may answer).
  */
-export function serveJobs(bigquery: FakeBigQuery, jobs: readonly JobFixture[], options: { readonly pageSize?: number } = {}): void {
+export function serveJobs(bigquery: FakeBigQuery, jobs: readonly JobFixture[], options: { readonly pageSize?: number; readonly now?: () => number } = {}): void {
+  // Google's clock, as each answer's HTTP Date carries it: the fakes' fixed time unless the test moves it.
+  const now = options.now ?? (() => Date.parse("2026-11-17T12:00:00Z"))
   const resources = jobs.map(jobResource)
   bigquery.on("listJobs", async (input) => {
-    if (input.stateFilter !== "done") throw new Error("jobs.list: this source must ask for done jobs")
+    if (input.stateFilter === undefined) throw new Error("jobs.list: this source always names the state it lists")
     if (input.maxResults !== undefined && (input.maxResults < 1 || input.maxResults > 1000)) throw new Error("jobs.list: maxResults out of range")
     if (input.minCreationTime !== undefined && input.maxCreationTime !== undefined && input.minCreationTime > input.maxCreationTime) {
       throw new Error("jobs.list: minCreationTime is after maxCreationTime")
     }
     const matched = resources
+      .filter((resource) => String(resource["state"]).toLowerCase() === input.stateFilter)
       .map((resource) => ({ resource, when: Number((resource["statistics"] as { creationTime: string }).creationTime) }))
       .filter((entry) => input.minCreationTime === undefined || entry.when >= input.minCreationTime)
       .filter((entry) => input.maxCreationTime === undefined || entry.when <= input.maxCreationTime)
@@ -185,7 +188,7 @@ export function serveJobs(bigquery: FakeBigQuery, jobs: readonly JobFixture[], o
     const size = Math.max(1, Math.min(input.maxResults ?? 1000, options.pageSize ?? 1000))
     const slice = matched.slice(offset, offset + size)
     const next = offset + size < matched.length ? String(offset + size) : undefined
-    return { items: slice.map(jobStatusOf), ...(next !== undefined ? { nextPageToken: next } : {}) }
+    return { items: slice.map(jobStatusOf), ...(next !== undefined ? { nextPageToken: next } : {}), serverTime: now() }
   })
 }
 

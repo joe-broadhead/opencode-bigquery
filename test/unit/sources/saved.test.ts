@@ -35,12 +35,12 @@ describe("bigquery.saved", () => {
     expect(output["asOf"]).toBe(NOW_ISO)
     expect(output["trust"]).toBe("untrusted")
     expect(output["cost"]).toEqual({ units: [{ per: "tib", count: 0 }], usd: 1048576 / 2 ** 40 * 6.25 })
-    // The descriptor's six operations are asserted under the source's own action, before the read's first call.
+    // The registry asserts the method's own action on its operation first; the source then asserts the contract's
+    // `bigquery.read` on every operation its descriptor declares, before the read's first call, then the table it reads
+    // (§5.4's per-object assert, through the method's action).
     const operations = asserted.filter((request) => request.action === "bigquery.saved_read").map((request) => request.resources[0])
-    // The registry asserts the method's own operation first; the source then asserts every operation its descriptor
-    // declares, then the table it reads (§5.4's per-object assert, through the same action).
-    expect(operations.slice(0, 7)).toEqual([
-      "default:bigquery.jobs.query",
+    expect(operations[0]).toBe("default:bigquery.jobs.query")
+    expect(asserted.filter((request) => request.action === "bigquery.read").map((request) => request.resources[0])).toEqual([
       "default:bigquery.jobs.getQueryResults",
       "default:bigquery.jobs.query",
       "default:bigquery.routines.get",
@@ -144,5 +144,73 @@ describe("bigquery.saved", () => {
     expect(probe.asserted[0]).toMatchObject({ action: "bigquery.probe", resources: ["*"] })
     const read = await runTool(target, "saved_read", { source: "saved", name: "revenue" })
     expect(read.asserted[0]).toMatchObject({ action: "bigquery.saved_read", resources: ["default:bigquery.jobs.query"] })
+  })
+})
+
+describe("the sources' tools RPC methods, called as a consumer calls them", () => {
+  // The contract's reader (`read`, `probe`, the bind step's suggest) sends the item's `input.source`, the account, and
+  // for a read the confirmed scope (docs/contract.md L2). `scriptMethod` parses each input strictly, as the tools RPC
+  // does, so these are the real path.
+  const methodOf = async (target: ReturnType<typeof harness>, name: string) => {
+    const { scriptMethod } = await import("../../../src/tool-spec.js")
+    const asserted: { action: string; resources: string[] }[] = []
+    const method = scriptMethod(target.spec(name), async (request) => {
+      asserted.push({ action: request.action, resources: request.resources })
+    })
+    const identity = { sessionID: "ses_rpc", agent: "build", messageID: "msg_rpc", id: "call_rpc", signal: new AbortController().signal }
+    const { SCHEMAS } = await import("../../../src/domain/contract.js")
+    const output = SCHEMAS[name as keyof typeof SCHEMAS].output
+    // The tools RPC checks every answer against the method's declared output, so these runs do too.
+    const run = async (input: unknown) => {
+      const answer = (await method.run(input as never, identity as never)) as Record<string, unknown>
+      const checked = output.safeParse(answer)
+      if (!checked.success) throw new Error(`${name}'s answer breaks its declared output: ${checked.error.message}`)
+      return answer
+    }
+    return { asserted, run }
+  }
+
+  test("probe takes { source, account } for either source, by its short name or its id, and names it back", async () => {
+    const target = harness()
+    const probe = await methodOf(target, "probe")
+    for (const [source, named] of [["jobs", "jobs"], ["saved", "saved"], ["bigquery.jobs", "jobs"], ["bigquery.saved", "saved"]] as const) {
+      expect(await probe.run({ source, account: "default" })).toMatchObject({ source: named, account: "default", owner: { id: "mailto:ada@example.invalid" } })
+    }
+    expect(await probe.run({ account: "default" })).toMatchObject({ source: "jobs" })
+    await expect(probe.run({ source: "elsewhere", account: "default" })).rejects.toThrow(/INPUT_INVALID/)
+    expect(target.bigquery.calls).toEqual([])
+  })
+
+  test("saved_list takes the kit's { source: bigquery.saved, account } and asserts bigquery.read on the estimate", async () => {
+    const target = harness({ savedQueries: { revenue: { sql: "SELECT id FROM sales.orders" } } })
+    target.bigquery.on("estimate", async () => ({ statementType: "SELECT", totalBytesProcessed: 1024 }))
+    const list = await methodOf(target, "saved_list")
+    const answer = await list.run({ source: "bigquery.saved", account: "default" })
+    expect(answer["options"]).toEqual([{ id: "revenue", label: "revenue: SELECT id FROM sales.orders" }])
+    expect(list.asserted).toEqual([
+      { action: "bigquery.saved_list", resources: ["default:bigquery.jobs.queryEstimate"] },
+      { action: "bigquery.read", resources: ["default:bigquery.jobs.queryEstimate"] },
+    ])
+  })
+
+  test("saved_read takes { source, account, scope, name }, and refuses a name outside the confirmed queries", async () => {
+    const target = harness({ savedQueries: { revenue: { sql: "SELECT id, amount FROM sales.orders" }, other: { sql: "SELECT 1" } } })
+    nativeRead(target.bigquery)
+    const read = await methodOf(target, "saved_read")
+    const answer = await read.run({ source: "saved", account: "default", scope: { queries: ["revenue"] }, name: "revenue" })
+    expect(answer["data"]).toBeDefined()
+    const calls = target.bigquery.calls.length
+    await expect(read.run({ source: "saved", account: "default", scope: { queries: ["revenue"] }, name: "other" })).rejects.toThrow(/INPUT_INVALID/)
+    expect(target.bigquery.calls.length).toBe(calls)
+  })
+
+  test("events_list takes { source, account, scope, since, limit } as the reader sends it", async () => {
+    const { serveJobs, job } = await import("./support.js")
+    const target = harness()
+    serveJobs(target.bigquery, [job({ jobId: "j1", created: Date.parse("2026-11-17T11:00:00Z"), ended: Date.parse("2026-11-17T11:30:00Z") })])
+    const list = await methodOf(target, "events_list")
+    const answer = await list.run({ source: "jobs", account: "default", scope: { projects: ["invented-proj"] }, since: "2026-11-17T10:00:00Z", limit: 10 })
+    expect((answer["events"] as unknown[]).length).toBe(1)
+    expect(list.asserted.map((request) => request.action)).toEqual(["bigquery.events_list", "bigquery.read"])
   })
 })

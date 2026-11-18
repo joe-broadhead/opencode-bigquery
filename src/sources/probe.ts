@@ -36,8 +36,7 @@ export async function probeSource(deps: SourceDeps, input: unknown): Promise<Pro
   const identity = await deps.ports.auth.identity(deps.account, deps.call.signal)
   const email = identity.email
   const owner = email !== undefined ? { id: `mailto:${email}`, label: email } : { id: `bigquery:account:${deps.account}`, label: `BigQuery account ${deps.account}` }
-  // One probe for the plugin, called per source: the contract's `sources.probe` names the method once, and a source
-  // with `input.source` is checked against that name. The plugin's own schemas do not carry `source` yet (a contract
-  // request in this pull request), so a call through its tools RPC answers for "jobs", the first source.
+  // One probe for the plugin, called per source: the contract's `sources.probe` names the method once, and the reader
+  // sends the item's `input.source` with it (`{ source, account }`), which the answer names back.
   return probeResult({ source, account: deps.account, owner })
 }

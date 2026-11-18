@@ -1,14 +1,16 @@
-// The `bigquery.jobs` source (design §10), and the three bugs every source review finds: the sliding gap, the jam, and
-// a gap repeated once per read. Each is a test here, against the strict `jobs.list` stand-in — no BigQuery call.
+// The `bigquery.jobs` source (design §10) one behaviour at a time: the contract's page, the read's range on Google's
+// clock, the floor kept below running jobs, the three bugs every source review finds (the sliding gap, the jam, a gap
+// repeated within a read), the cursor's binding and bounds, the per-operation assert, and unreachable locations.
+// ./load.test.ts runs the same source at realistic load. No BigQuery call: the stand-ins are ./support.ts and ./sim.ts.
 import { describe, expect, test } from "vitest"
 import { encodeBoundCursor } from "@we-the-rebel-alliance/source-contract/cursor"
 import { bindingOf } from "../../../src/sources/cursor.js"
+import { SETTLE_MS } from "../../../src/sources/events.js"
 import { harness, runTool, serveJobs, type JobFixture } from "./support.js"
+import { DAY, HOUR, MIN, newReading, readOnce, Sim, type SimJob } from "./sim.js"
 
 const NOW = Date.parse("2026-11-17T12:00:00Z")
-const HOUR = 3_600_000
-const DAY = 86_400_000
-const MIN = 60_000
+const iso = (ms: number) => new Date(ms).toISOString()
 
 const job = (fields: Partial<JobFixture> & { readonly jobId: string; readonly created: number; readonly ended: number }): JobFixture => ({
   statementType: "SELECT",
@@ -29,7 +31,7 @@ async function drain(target: ReturnType<typeof harness>, input: Record<string, u
   const collected: string[] = []
   const pages: Record<string, unknown>[] = []
   let cursor = input["cursor"] as string | undefined
-  for (let round = 0; round < 400; round++) {
+  for (let round = 0; round < 2_000; round++) {
     const answer = await page(target, { ...input, ...(cursor !== undefined ? { cursor } : {}), limit })
     pages.push(answer)
     collected.push(...ids(answer))
@@ -40,131 +42,109 @@ async function drain(target: ReturnType<typeof harness>, input: Record<string, u
 }
 
 describe("bigquery.jobs", () => {
-  test("pages oldest first, ends with more: false, and then answers an empty page", async () => {
+  test("pages hold their events oldest first, a read ends with more: false, and the next read repeats nothing", async () => {
     const target = harness()
     serveJobs(target.bigquery, [
       job({ jobId: "j1", created: NOW - 3 * HOUR, ended: NOW - 3 * HOUR + MIN }),
       job({ jobId: "j2", created: NOW - 2 * HOUR, ended: NOW - HOUR }),
       job({ jobId: "j3", created: NOW - HOUR, ended: NOW - 30 * MIN }),
     ])
-    const since = new Date(NOW - 4 * HOUR).toISOString()
-    const first = await page(target, { since, limit: 1 })
-    expect(first["more"]).toBe(true)
-    expect(ids(first)).toEqual([`invented-proj:US:j1`])
-    const second = await page(target, { cursor: first["cursor"], limit: 1 })
-    expect(ids(second)).toEqual([`invented-proj:US:j2`])
-    const third = await page(target, { cursor: second["cursor"], limit: 1 })
-    expect(ids(third)).toEqual([`invented-proj:US:j3`])
-    expect(third["more"]).toBe(false)
-    // The chain is complete: its cursor starts a lookback, which finds nothing new and repeats nothing.
-    const empty = await page(target, { cursor: third["cursor"] })
-    expect(empty["events"]).toEqual([])
-    expect(empty["more"]).toBe(false)
-    for (const answer of [first, second, third]) {
-      const order = times(answer)
-      expect(order).toEqual([...order].sort((left, right) => left - right))
-    }
-  })
-
-  test("a job still running at the first read is delivered once it finishes, and the lookback repeats nothing", async () => {
-    const target = harness()
-    const jobs: JobFixture[] = [
-      job({ jobId: "done", created: NOW - 2 * HOUR, ended: NOW - 90 * MIN }),
-      job({ jobId: "late", created: NOW - 90 * MIN, ended: NOW, state: "RUNNING" }),
-    ]
-    serveJobs(target.bigquery, jobs)
-    const first = await page(target, { since: new Date(NOW - 4 * HOUR).toISOString() })
-    expect(ids(first)).toEqual(["invented-proj:US:done"])
-    // Ten minutes later the job has finished; its end is after the first read's window end.
-    target.clock.advance(10 * MIN)
-    const finished: JobFixture[] = [
-      job({ jobId: "done", created: NOW - 2 * HOUR, ended: NOW - 90 * MIN }),
-      job({ jobId: "late", created: NOW - 90 * MIN, ended: NOW + 5 * MIN, state: "DONE" }),
-    ]
-    serveJobs(target.bigquery, finished)
-    const second = await page(target, { cursor: first["cursor"] })
-    expect(ids(second)).toEqual(["invented-proj:US:late"])
-    const third = await page(target, { cursor: second["cursor"] })
-    expect(third["events"]).toEqual([])
-  })
-
-  test("the sliding gap: a truncated window carries the older part's floor and reads it next, never from now", async () => {
-    const target = harness()
-    // 12 jobs, one provider page per call: ten calls can only fetch the newest ten, so the window is truncated.
-    const jobs = Array.from({ length: 12 }, (_, index) =>
-      job({ jobId: `j${String(index + 1).padStart(2, "0")}`, created: NOW - (12 - index) * HOUR, ended: NOW - (12 - index) * HOUR + 5 * MIN }),
-    )
-    serveJobs(target.bigquery, jobs, { pageSize: 1 })
-    const since = new Date(NOW - 24 * HOUR).toISOString()
-    const first = await page(target, { since })
-    expect(first["more"]).toBe(true)
-    expect(first["gap"]).toBeUndefined()
-    // The delivered part is the newer one; the older part is owed, and the next page reads it.
-    const { collected, pages } = await drain(target, { since })
-    expect(new Set(collected).size).toBe(12)
-    expect(collected.length).toBe(12)
-    // The job at the truncation line (j03, created 10 hours ago) was not skipped: it is on the continuation page.
-    expect(pages.length).toBeGreaterThan(1)
-    expect(pages.flatMap(ids)).toContain("invented-proj:US:j03")
+    const since = iso(NOW - 4 * HOUR)
+    const all = await page(target, { since })
+    expect(ids(all)).toEqual(["invented-proj:US:j1", "invented-proj:US:j2", "invented-proj:US:j3"])
+    expect(times(all)).toEqual([...times(all)].sort((left, right) => left - right))
+    expect(all["more"]).toBe(false)
+    // Read again with limit 1: each page holds one, and the read ends after the third.
+    const { collected, pages } = await drain(target, { since }, 1)
+    expect([...collected].sort()).toEqual(["invented-proj:US:j1", "invented-proj:US:j2", "invented-proj:US:j3"])
     expect(pages.at(-1)!["more"]).toBe(false)
+    const again = await page(target, { cursor: all["cursor"] })
+    expect(again["events"]).toEqual([])
+    expect(again["more"]).toBe(false)
   })
 
-  test("a truncated window cut by the page limit carries both the position and the older part's floor", async () => {
-    // One provider page per call and more than ten pages of jobs: the window narrows, the newer part is cut by limit,
-    // and the older part must still be read next. Every job is delivered once, across windows.
-    const jobs = Array.from({ length: 1_050 }, (_, index) =>
-      job({ jobId: `w-${String(index).padStart(4, "0")}`, created: NOW - 24 * HOUR + index * 60_000, ended: NOW - 24 * HOUR + index * 60_000 + 30_000 }),
+  test("a read delivers what ended up to Google's now less the settle margin; what ends later is the next read's", async () => {
+    const target = harness()
+    const jobs: SimJob[] = [
+      { jobId: "settled", created: NOW - 10 * MIN, ended: NOW - SETTLE_MS - 1_000 },
+      { jobId: "settling", created: NOW - 10 * MIN, ended: NOW - 30_000 },
+    ]
+    const sim = new Sim(target, jobs)
+    const reading = newReading()
+    target.clock.time = NOW
+    await readOnce(sim, target, reading, { since: NOW - HOUR })
+    expect([...reading.delivered.keys()]).toEqual(["settled"])
+    target.clock.time = NOW + 5 * MIN
+    await readOnce(sim, target, reading, {})
+    expect([...reading.delivered.keys()].sort()).toEqual(["settled", "settling"])
+    expect([...reading.delivered.values()]).toEqual([1, 1])
+  })
+
+  test("a job queued then running for hours keeps the floor below it, and is delivered once when it finishes", async () => {
+    const target = harness()
+    const long: SimJob = { jobId: "long", created: NOW + 5 * MIN, started: NOW + 2 * HOUR, ended: NOW + 7 * HOUR }
+    const short: SimJob[] = Array.from({ length: 40 }, (_, index) => ({ jobId: `s${index}`, created: NOW + index * 10 * MIN, ended: NOW + index * 10 * MIN + MIN }))
+    const sim = new Sim(target, [long, ...short])
+    const reading = newReading()
+    target.clock.time = NOW
+    await readOnce(sim, target, reading, { since: NOW - HOUR })
+    for (let hour = 1; hour <= 9; hour++) {
+      target.clock.time = NOW + hour * HOUR
+      await readOnce(sim, target, reading, {})
+    }
+    expect(reading.delivered.get("long")).toBe(1)
+    expect(reading.delivered.size).toBe(41)
+    expect([...reading.delivered.values()].every((count) => count === 1)).toBe(true)
+    expect(reading.gaps).toEqual([])
+  })
+
+  test("the sliding gap: after an expired gap, a job ending minutes later is listed, never skipped by a line from now", async () => {
+    const target = harness()
+    const jobs: SimJob[] = [
+      { jobId: "before", created: NOW - 20 * MIN, ended: NOW - 10 * MIN },
+      { jobId: "after", created: NOW + MIN, ended: NOW + 4 * MIN },
+      { jobId: "later", created: NOW + 2 * HOUR, ended: NOW + 2 * HOUR + MIN },
+    ]
+    const sim = new Sim(target, jobs)
+    const expired = encodeBoundCursor(bindingOf("default", undefined), { e: NOW - 190 * DAY, f: NOW - 191 * DAY })
+    const reading = newReading()
+    reading.cursor = expired
+    target.clock.time = NOW
+    await readOnce(sim, target, reading, { limit: 1 })
+    expect(reading.gaps).toEqual([{ at: NOW, reason: "expired", since: iso(NOW - 190 * DAY) }])
+    for (const at of [NOW + 5 * MIN, NOW + 10 * MIN, NOW + 3 * HOUR]) {
+      target.clock.time = at
+      await readOnce(sim, target, reading, { limit: 1 })
+    }
+    expect([...reading.delivered.keys()].sort()).toEqual(["after", "before", "later"])
+    expect(reading.gaps).toHaveLength(1)
+  })
+
+  test("a gap is answered once per read, across many small pages, and the cursor it answers with does not gap again", async () => {
+    const target = harness()
+    serveJobs(
+      target.bigquery,
+      Array.from({ length: 12 }, (_, index) => job({ jobId: `j${index}`, created: NOW - 5 * HOUR + index * MIN, ended: NOW - 4 * HOUR + index * MIN })),
     )
-    const target = harness()
-    serveJobs(target.bigquery, jobs, { pageSize: 1 })
-    const { collected, pages } = await drain(target, { since: new Date(NOW - 24 * HOUR).toISOString() }, 5)
-    expect(new Set(collected).size).toBe(1_050)
-    expect(collected.length).toBe(1_050)
-    expect(pages.at(-1)!["gap"]).toBeUndefined()
-    // The chain drained a backlog down to an older window; its top, not that window's end, is the high-water mark, so
-    // the lookback after it repeats none of the newer part it already listed. It still walks the rest of the lookback
-    // (nothing there is finished after the mark), and every page of that walk is empty.
-    let after = await page(target, { cursor: pages.at(-1)!["cursor"] })
-    expect(after["events"]).toEqual([])
-    for (let round = 0; round < 400 && after["more"] === true; round++) {
-      after = await page(target, { cursor: after["cursor"] })
-      expect(after["events"]).toEqual([])
-    }
-    expect(after["more"]).toBe(false)
+    const expired = encodeBoundCursor(bindingOf("default", undefined), { e: NOW - 181 * DAY, f: NOW - 182 * DAY })
+    const { pages, collected } = await drain(target, { cursor: expired }, 1)
+    expect(pages.filter((answer) => answer["gap"] !== undefined)).toHaveLength(1)
+    expect(pages[0]!["gap"]).toEqual({ reason: "expired", since: iso(NOW - 181 * DAY) })
+    expect(collected).toHaveLength(12)
+    const next = await page(target, { cursor: pages.at(-1)!["cursor"] })
+    expect(next["gap"]).toBeUndefined()
   })
 
-  test("the jam: 200 jobs ending in one millisecond drain once each through the position in the cursor", async () => {
-    const at = NOW - HOUR
-    const jobs = Array.from({ length: 200 }, (_, index) => job({ jobId: `burst-${String(index).padStart(3, "0")}`, created: NOW - 2 * HOUR + index, ended: at }))
+  test("the jam: 200 jobs ending in one millisecond drain once each with limit 7", async () => {
     const target = harness()
-    serveJobs(target.bigquery, jobs)
-    const { collected } = await drain(target, { since: new Date(NOW - 4 * HOUR).toISOString() }, 50)
-    expect(collected.length).toBe(200)
+    serveJobs(
+      target.bigquery,
+      Array.from({ length: 200 }, (_, index) => job({ jobId: `tie${String(index).padStart(3, "0")}`, created: NOW - 2 * HOUR + index * 1_000, ended: NOW - HOUR })),
+    )
+    const { collected, pages } = await drain(target, { since: iso(NOW - 3 * HOUR) }, 7)
+    expect(collected).toHaveLength(200)
     expect(new Set(collected).size).toBe(200)
-  })
-
-  test("a burst larger than a page keeps its oldest-first order", async () => {
-    const jobs = Array.from({ length: 120 }, (_, index) => job({ jobId: `b-${String(index).padStart(3, "0")}`, created: NOW - 3 * HOUR + index, ended: NOW - HOUR + index * 100 }))
-    const target = harness()
-    serveJobs(target.bigquery, jobs)
-    const { pages } = await drain(target, { since: new Date(NOW - 4 * HOUR).toISOString() }, 20)
-    for (const answer of pages) {
-      const order = times(answer)
-      expect(order).toEqual([...order].sort((left, right) => left - right))
-    }
-  })
-
-  test("a gap is announced once: an expired cursor gaps, and the cursor it answers with does not gap again", async () => {
-    const target = harness()
-    serveJobs(target.bigquery, [job({ jobId: "j1", created: NOW - HOUR, ended: NOW - 30 * MIN })])
-    const expired = encodeBoundCursor(bindingOf("default", undefined), { w: NOW - 181 * DAY, f: NOW - 182 * DAY, e: NOW - 181 * DAY })
-    const first = await page(target, { cursor: expired })
-    expect(first["gap"]).toEqual({ reason: "expired", since: new Date(NOW - 181 * DAY).toISOString() })
-    expect(first["more"]).toBe(false)
-    const second = await page(target, { cursor: first["cursor"] })
-    expect(second["gap"]).toBeUndefined()
-    const third = await page(target, { cursor: second["cursor"] })
-    expect(third["gap"]).toBeUndefined()
+    expect(pages.every((answer) => answer["gap"] === undefined)).toBe(true)
   })
 
   test("a secret-shaped title is refused, with its reason, and never listed", async () => {
@@ -173,31 +153,46 @@ describe("bigquery.jobs", () => {
       job({ jobId: "ok", created: NOW - 2 * HOUR, ended: NOW - 90 * MIN }),
       job({ jobId: "secret", created: NOW - HOUR, ended: NOW - 30 * MIN, statementType: "deploy ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" }),
     ])
-    const answer = await page(target, { since: new Date(NOW - 4 * HOUR).toISOString() })
+    const answer = await page(target, { since: iso(NOW - 4 * HOUR) })
     expect(ids(answer)).toEqual(["invented-proj:US:ok"])
     expect(answer["refused"]).toEqual([expect.objectContaining({ external_id: "invented-proj:US:secret", reason: "secret" })])
   })
 
-  test("the cursor is bound to its source, account and scope, and another binding's is CURSOR_INVALID", async () => {
+  test("the cursor is bound to its source, account and scope, and another binding's or a malformed state is CURSOR_INVALID", async () => {
     const target = harness()
     serveJobs(target.bigquery, [job({ jobId: "j1", created: NOW - HOUR, ended: NOW - 30 * MIN })])
-    const scoped = await page(target, { since: new Date(NOW - 2 * HOUR).toISOString(), scope: { projects: ["invented-proj"] } })
-    // The same cursor without the confirmed scope is another binding's.
+    const scoped = await page(target, { since: iso(NOW - 2 * HOUR), scope: { projects: ["invented-proj"] } })
     const unscoped = await runTool(target, "events_list", { source: "jobs", cursor: scoped["cursor"] })
     expect(unscoped.output["error"]).toBe("CURSOR_INVALID")
-    const otherAccount = encodeBoundCursor(bindingOf("other", undefined), { w: NOW, f: NOW - HOUR, e: NOW })
+    const otherAccount = encodeBoundCursor(bindingOf("other", undefined), { e: NOW, f: NOW - HOUR })
     expect((await runTool(target, "events_list", { source: "jobs", cursor: otherAccount })).output["error"]).toBe("CURSOR_INVALID")
-    const otherPlugin = encodeBoundCursor({ plugin: "another-plugin", source: "jobs", account: "default" }, { w: NOW, f: NOW - HOUR, e: NOW })
+    const otherPlugin = encodeBoundCursor({ plugin: "another-plugin", source: "jobs", account: "default" }, { e: NOW, f: NOW - HOUR })
     expect((await runTool(target, "events_list", { source: "jobs", cursor: otherPlugin })).output["error"]).toBe("CURSOR_INVALID")
-    // The scoped cursor is this binding's, and reads the scope's pages.
+    for (const state of [{ w: NOW }, { e: NOW, f: NOW, c: NOW - 1, n: NOW, i: 0 }, { e: NOW, f: NOW, c: NOW, n: NOW, i: 5 }, { e: NOW, f: NOW, c: NOW, n: NOW, i: 0, p: NOW, h: "zz" }]) {
+      const bad = encodeBoundCursor(bindingOf("default", undefined), state)
+      expect((await runTool(target, "events_list", { source: "jobs", cursor: bad })).output["error"], JSON.stringify(state)).toBe("CURSOR_INVALID")
+    }
     const again = await page(target, { cursor: scoped["cursor"], scope: { projects: ["invented-proj"] } })
     expect(again["events"]).toEqual([])
+  })
+
+  test("the cursor stays small whatever the account, scope and position", async () => {
+    // The codec binds the account and scope by hash, so neither adds to the cursor's length.
+    const target = harness()
+    serveJobs(
+      target.bigquery,
+      Array.from({ length: 30 }, (_, index) => job({ jobId: `j${index}`, created: NOW - 5 * HOUR + index * MIN, ended: NOW - HOUR })),
+    )
+    const projects = Array.from({ length: 40 }, (_, index) => `invented-project-${String(index).padStart(4, "0")}`)
+    const answer = await page(target, { since: iso(NOW - 6 * HOUR), scope: { projects }, limit: 1 })
+    expect(answer["more"]).toBe(true)
+    expect(String(answer["cursor"]).length).toBeLessThanOrEqual(400)
   })
 
   test("an events page names its owner, its source and its account, and carries a scope when one is confirmed", async () => {
     const target = harness()
     serveJobs(target.bigquery, [job({ jobId: "j1", created: NOW - HOUR, ended: NOW - 30 * MIN })])
-    const answer = await page(target, { since: new Date(NOW - 2 * HOUR).toISOString(), scope: { projects: ["invented-proj"] } })
+    const answer = await page(target, { since: iso(NOW - 2 * HOUR), scope: { projects: ["invented-proj"] } })
     expect(answer["source"]).toBe("jobs")
     expect(answer["account"]).toBe("default")
     expect(answer["owner"]).toEqual({ id: "mailto:ada@example.invalid", label: "ada@example.invalid" })
@@ -205,10 +200,53 @@ describe("bigquery.jobs", () => {
     expect(answer["scope"]).toEqual({ projects: ["invented-proj"] })
   })
 
+  test("asserts the contract's bigquery.read on the account's jobs.list before any call, and a denial reads nothing", async () => {
+    const target = harness()
+    serveJobs(target.bigquery, [job({ jobId: "j1", created: NOW - HOUR, ended: NOW - 30 * MIN })])
+    const allowed = await runTool(target, "events_list", { source: "jobs", since: iso(NOW - 2 * HOUR) })
+    expect(allowed.asserted.slice(0, 2).map((request) => [request.action, request.resources])).toEqual([
+      ["bigquery.events_list", ["default:bigquery.jobs.list"]],
+      ["bigquery.read", ["default:bigquery.jobs.list"]],
+    ])
+    const denied = harness()
+    serveJobs(denied.bigquery, [])
+    const refused = await runTool(denied, "events_list", { source: "jobs" }, { deny: (request) => request.action === "bigquery.read" }).catch((error: unknown) => error)
+    expect(String(refused)).toContain("denied")
+    expect(denied.bigquery.calls.filter((entry) => entry.method === "listJobs")).toEqual([])
+  })
+
+  test("lists queued jobs before running ones at a read's start, so a job moving between them is in one", async () => {
+    const target = harness()
+    serveJobs(target.bigquery, [job({ jobId: "j1", created: NOW - HOUR, ended: NOW - 30 * MIN })])
+    await page(target, { since: iso(NOW - 2 * HOUR) })
+    const states = target.bigquery.calls.filter((entry) => entry.method === "listJobs").map((entry) => (entry.args[0] as { stateFilter: string }).stateFilter)
+    expect(states.slice(0, 3)).toEqual(["pending", "running", "done"])
+  })
+
+  test("a location Google reports unreachable fails the read with UNAVAILABLE, and the same cursor reads it all later", async () => {
+    const target = harness()
+    const jobs: SimJob[] = [
+      { jobId: "us", created: NOW - 50 * MIN, ended: NOW - 40 * MIN, location: "US" },
+      { jobId: "eu", created: NOW - 50 * MIN, ended: NOW - 40 * MIN, location: "EU" },
+    ]
+    let down = true
+    const sim = new Sim(target, jobs, { unreachable: () => (down ? ["EU"] : []) })
+    target.clock.time = NOW
+    const failed = await page(target, { since: iso(NOW - HOUR) })
+    expect(failed["error"]).toBe("UNAVAILABLE")
+    expect(String(failed["message"])).toContain("the location EU unreachable")
+    expect(failed["retryAfterSec"]).toBe(300)
+    down = false
+    const reading = newReading()
+    await readOnce(sim, target, reading, { since: NOW - HOUR })
+    expect([...reading.delivered.keys()].sort()).toEqual(["eu", "us"])
+    expect(reading.gaps).toEqual([])
+  })
+
   test("a script's call throws the contract's error, and the model's call answers the envelope", async () => {
     const target = harness()
     serveJobs(target.bigquery, [])
-    const expired = encodeBoundCursor(bindingOf("default", undefined), { w: NOW - 400 * DAY, f: NOW - 401 * DAY, e: NOW - 400 * DAY })
+    const expired = encodeBoundCursor(bindingOf("default", undefined), { e: NOW - 400 * DAY, f: NOW - 401 * DAY })
     const model = await page(target, { cursor: expired })
     expect(model["gap"]).toMatchObject({ reason: "expired" })
     const script = await runTool(target, "events_list", { source: "jobs", cursor: "not-a-cursor" }, { via: "rpc" }).catch((error: unknown) => error)

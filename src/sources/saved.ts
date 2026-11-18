@@ -14,15 +14,18 @@
  *   the SQL and its estimate, not just its name.
  */
 import { cut } from "@we-the-rebel-alliance/source-contract/events"
-import { operationResource } from "../domain/accounts.js"
 import { BigQueryError } from "../domain/errors.js"
 import { usdFor } from "../guards/cost.js"
 import { readContext, prepareRead, runRead } from "../guards/read.js"
 import { settingsOf } from "../guards/settings.js"
+import { assertSourceReads, SAVED_SOURCE } from "./assert.js"
 import { sourceError, sourceErrorOf } from "./errors.js"
 import type { SourceDeps } from "./events.js"
 
-/** The operations the source declares, asserted under its own action before the first call (the descriptor's list). */
+/**
+ * The operations the source declares (the descriptor's list), each asserted as the contract's `bigquery.read` on
+ * `<account>:<operation>` before the read's first call.
+ */
 export const SAVED_OPERATIONS: readonly string[] = [
   "bigquery.jobs.getQueryResults",
   "bigquery.jobs.query",
@@ -66,19 +69,26 @@ function cell(value: unknown): string | number | boolean | null {
   return text.length > CELL ? `${text.slice(0, CELL - 1)}…` : text
 }
 
-/** The declared operations, asserted before the read's first call: the descriptor promises exactly these. */
-async function assertOperations(deps: SourceDeps): Promise<void> {
-  for (const operation of SAVED_OPERATIONS) {
-    await deps.call.assert({
-      action: "bigquery.saved_read",
-      resources: [operationResource(deps.account, operation)],
-      metadata: { account: deps.account, operation },
-    })
-  }
+/** The bind step's one operation: a free `jobs.query` dry run per saved query. */
+export const SUGGEST_OPERATIONS: readonly string[] = ["bigquery.jobs.queryEstimate"]
+
+/** Whether a name is inside the confirmed scope's `queries`; no scope is the whole source. */
+function inScope(name: string, scope: Readonly<Record<string, string | readonly string[]>> | undefined): boolean {
+  if (scope === undefined) return true
+  const queries = scope["queries"]
+  if (queries === undefined) return true
+  return (typeof queries === "string" ? [queries] : queries).includes(name)
 }
 
-/** `saved_read`: one saved query, through the read path, as the registry's table. */
-export async function savedRead(deps: SourceDeps, name: string): Promise<SnapshotAnswer> {
+/**
+ * `saved_read`: one saved query, through the read path, as the registry's table. A consumer sends the confirmed scope
+ * with the read (contract L2: `{ source, account, scope, params }`); a name outside its `queries` is refused before
+ * anything runs.
+ */
+export async function savedRead(deps: SourceDeps, name: string, scope?: Readonly<Record<string, string | readonly string[]>>): Promise<SnapshotAnswer> {
+  if (!inScope(name, scope)) {
+    throw sourceError("INPUT_INVALID", `The saved query ${nameOf(name)} is outside the queries this read was confirmed for.`, "Read one of the queries the source's scope names, or confirm the source again with this one.")
+  }
   const saved = deps.options.savedQueries[name]
   if (saved === undefined) {
     throw sourceError(
@@ -87,7 +97,7 @@ export async function savedRead(deps: SourceDeps, name: string): Promise<Snapsho
       "Choose one of the names saved_list offers, or add it to the plugin's savedQueries option.",
     )
   }
-  await assertOperations(deps)
+  await assertSourceReads(deps, SAVED_SOURCE, SAVED_OPERATIONS)
   if (saved.allowUncached !== true && NON_CACHEABLE.test(saved.sql)) {
     throw sourceError(
       "INPUT_INVALID",
@@ -166,6 +176,7 @@ export async function savedList(deps: SourceDeps): Promise<SavedListAnswer> {
   if (deps.account === "*") {
     throw sourceError("INPUT_INVALID", "The call named no account, and this plugin has several.", "Pass the account saved_list should estimate for.")
   }
+  await assertSourceReads(deps, SAVED_SOURCE, SUGGEST_OPERATIONS)
   const settings = settingsOf(deps.options, deps.account)
   const options: SavedOption[] = []
   const queries: { name: string; sql: string; bytes?: number; costUsd?: number }[] = []

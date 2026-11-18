@@ -32,7 +32,7 @@ const events_list: Handlers["events_list"] = async (input, context) => {
 }
 
 const saved_read: Handlers["saved_read"] = async (input, context) => {
-  const snapshot = await answered(context, () => savedRead(depsOf(context), input.name))
+  const snapshot = await answered(context, () => savedRead(depsOf(context), input.name, input.scope))
   return snapshot as unknown as OutputOf<"saved_read">
 }
 
