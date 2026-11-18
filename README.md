@@ -294,6 +294,10 @@ applies.
   dry-run list of 50 or more objects is treated as possibly cut (Google documents that limit for property graphs only:
   [Job resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job)). Past any of them the read goes to a
   plan, so a query over a deep chain of views cannot run inline.
+- **A bare column named like a statement keyword is refused**: the lexer reads `commit`, `begin`, `rollback`, `call`
+  and `execute immediate` anywhere outside a routine definition as a statement that runs hidden text, so a `SELECT` over
+  a column called `commit` answers `STATEMENT_NOT_READ`. Quote it (`` `commit` ``) or rename it; it is a lexer false
+  positive, not a BigQuery rule.
 - **A 0-byte estimate is never trusted**: a query that legitimately estimates 0 bytes over a non-empty table, or a
   row-policy probe that cannot read a column, is treated as row-secured and goes to a plan.
 - **Wildcard tables, property graphs and table-typed routine arguments fail closed**: the plugin cannot see what they
