@@ -165,6 +165,8 @@ export interface AuthPort {
    */
   level(account: string, signal: AbortSignal): Promise<LevelDecision>
   identity(account: string, signal: AbortSignal): Promise<Identity>
+  /** The stored sign-in's device binding; undefined for a headless account or no sign-in; never a Google call. */
+  binding(account: string, signal: AbortSignal): Promise<"bound" | "unbound" | undefined>
   /** The configured accounts and their modes. */
   accounts(): readonly { readonly alias: string; readonly mode: Mode }[]
 }

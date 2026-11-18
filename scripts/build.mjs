@@ -44,7 +44,7 @@ const REQUIRE_BANNER = 'import { createRequire as __bigqueryCreateRequire } from
 const VERSION = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version
 const presets = [["babel-preset-solid", { moduleName: "@opentui/solid", generate: "universal" }], "@babel/preset-typescript"]
 // A minified bundle writes its imports without spaces (`from"x"`, `import{a}`). The TUI part must keep them plain.
-const MINIFIED_IMPORT = /\bfrom"|\bimport[{*]/
+const MINIFIED_IMPORT = /(?<!["'`\w$.])(?:from|import)["']/
 
 /** Compiles .tsx with Babel's Solid preset as esbuild loads it; esbuild handles plain .ts itself. */
 const solid = {

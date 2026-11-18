@@ -270,3 +270,24 @@ describe("the token, from the auth port", () => {
     }
   })
 })
+
+describe("the binding accessor (review bigquery-12, request 3)", () => {
+  it("reads the stored sign-in's binding from the active credential, with no Google request", async () => {
+    const bound = writeSetup()
+    expect(await bound.port.binding("work", signal)).toBe("bound")
+    const unbound = setup()
+    unbound.host.credential = { ...unbound.host.credential!, metadata: signInMetadata({ record: readRecord({ keyId: unbound.key.keyId, binding: "unbound" }), client: { client: CLIENT, source: "form" }, scopes: WITHOUT_MARKER }) }
+    expect(await unbound.port.binding("work", signal)).toBe("unbound")
+    for (const each of [bound, unbound]) expect(each.endpoint.requests).toEqual([])
+  })
+
+  it("is undefined with no sign-in, and for a headless account", async () => {
+    const none = setup()
+    none.host.credential = undefined
+    expect(await none.port.binding("work", signal)).toBeUndefined()
+    process.env.BIGQUERY_TEST_TOKEN = "ya29.invented-token-for-tests"
+    const headless = setup({ mode: "token", tokenEnv: "BIGQUERY_TEST_TOKEN" })
+    expect(await headless.port.binding("work", signal)).toBeUndefined()
+    expect(headless.endpoint.requests).toEqual([])
+  })
+})

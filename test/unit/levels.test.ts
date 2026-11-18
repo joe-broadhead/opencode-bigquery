@@ -97,6 +97,26 @@ describe("a token account", () => {
   })
 })
 
+describe("the binding accessor (review bigquery-12, request 3)", () => {
+  it("returns the stored sign-in's binding, undefined for a headless account or no sign-in, with no refresh", async () => {
+    const auth = new FakeAuth({
+      work: { mode: "interactive", record: writeRecord({ binding: "bound" }), refreshScopes: WITH_MARKER },
+      home: { mode: "interactive", record: readRecord({ binding: "unbound" }), refreshScopes: WITHOUT_MARKER },
+      fresh: { mode: "interactive", refreshScopes: [] },
+      ci: { mode: "adc", record: writeRecord(), refreshScopes: [] },
+    })
+    expect(await auth.binding("work", signal)).toBe("bound")
+    expect(await auth.binding("home", signal)).toBe("unbound")
+    expect(await auth.binding("fresh", signal)).toBeUndefined()
+    expect(await auth.binding("ci", signal)).toBeUndefined()
+    expect(auth.refreshes.size).toBe(0)
+  })
+
+  it("selects the disclosure status shows", () => {
+    expect(DISCLOSURE.bound).not.toBe(DISCLOSURE.unbound)
+  })
+})
+
 describe("the disclosure", () => {
   it("has a bound and an unbound wording, the unbound one without the key file", () => {
     expect(DISCLOSURE.bound).toContain("this plugin's key file")

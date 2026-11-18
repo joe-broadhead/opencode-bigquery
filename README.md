@@ -12,8 +12,8 @@ family's own tile, not Google's mark.
 
 ## Requirements
 
-- OpenCode `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7 and 2.3.0. A later 2.2 or 2.3 release loads
-  too, and the status marks it untested. Outside `>=2.2.3 <2.4.0` the plugin does not load, unless you set
+- OpenCode `>=2.2.3 <2.4.0`, tested on 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. A later 2.2 or 2.3
+  release loads too, and the status marks it untested. Outside `>=2.2.3 <2.4.0` the plugin does not load, unless you set
   [`allowUntestedHost`](docs/configuration.md#options).
 - macOS or Linux.
 - A Google Cloud project with the BigQuery API on, to bill queries to. For read-only use, your admin grants you

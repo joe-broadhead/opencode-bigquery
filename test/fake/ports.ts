@@ -117,6 +117,12 @@ export class FakeAuth implements AuthPort {
     return account.email ? { email: account.email, verified: true } : { verified: false }
   }
 
+  async binding(alias: string, _signal: AbortSignal): Promise<"bound" | "unbound" | undefined> {
+    this.calls.push({ method: "binding", args: [alias] })
+    const account = this.account(alias)
+    return account.mode === "interactive" ? account.record?.binding : undefined
+  }
+
   accounts() {
     return Object.entries(this.accountsByAlias).map(([alias, account]) => ({ alias, mode: account.mode }))
   }

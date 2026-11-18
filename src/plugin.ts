@@ -51,6 +51,7 @@ export function createBigQueryPlugin(seam: BigQuerySeam) {
         keep(
           await registerStatus(ctx, {
             access: options.access,
+            options,
             hostVersion: ctx.app.version,
             ...(hostWarning ? { hostWarning } : {}),
             tools: () => ({ registered: tools.length, notBuilt: seam.notBuilt }),
