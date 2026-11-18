@@ -1,7 +1,8 @@
 /**
  * Where `bigquery_save` writes (design §7): a path inside the project, `resultsDir` or the `allowedRoots` option, and
- * nowhere else (`SAVE_PATH_REFUSED`). A symbolic link is refused in any component the save would traverse, so a link
- * inside the project cannot walk the write outside it. An existing file is `SAVE_EXISTS` unless `overwrite: true`.
+ * nowhere else (`SAVE_PATH_REFUSED`). Roots and the target are compared as real paths, so a link inside the project
+ * cannot walk the write outside it, and an alias of a root (macOS's `/var` and `/private/var`) is still that root. An
+ * existing file is `SAVE_EXISTS` unless `overwrite: true`.
  *
  * The write goes to a temporary name beside the target and is renamed into place, so a failed or refused save never
  * leaves a half-written file under the name the person reads.
@@ -10,7 +11,7 @@
  * outside the project (design §4's row for this tool, §14.3's host suite).
  */
 import { existsSync, lstatSync, realpathSync } from "node:fs"
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path"
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
 import { BigQueryError } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { Call } from "../tool-spec.js"
@@ -50,40 +51,62 @@ function workingDirectory(): string {
   }
 }
 
-/** The target's absolute path, after every check that can be made before anything is written. */
-export function resolveTarget(input: { readonly path: string; readonly overwrite?: boolean }, options: Options, cwd = workingDirectory()): SaveTarget {
-  const results = resolve(cwd, options.resultsDir)
-  const roots = [cwd, results, ...options.allowedRoots.map((root) => resolve(cwd, root))]
-  const target = resolve(cwd, input.path)
-  const root = roots.filter((candidate) => inside(target, candidate)).sort((left, right) => right.length - left.length)[0]
-  if (root === undefined) throw refused("The save path is outside the project, resultsDir and allowedRoots.")
-  if (target === root) throw refused("The save path is a folder, not a file.")
-  // A symlink anywhere from the root to the target could walk the write outside it, so it is refused rather than
-  // followed. The realpath check also catches a root that is itself a link.
-  const ancestor = nearestExisting(dirname(target))
-  const realAncestor = realpathSync(ancestor)
-  if (!inside(realAncestor, realpathSync(root))) throw refused("The save path resolves outside the roots through a symbolic link.")
-  let current = target
-  for (;;) {
-    // `existsSync` follows the link, so a link to a missing file would pass it: `lstat` is what sees the link itself.
-    let stat: ReturnType<typeof lstatSync> | undefined
-    try {
-      stat = lstatSync(current)
-    } catch {
-      stat = undefined
-    }
-    if (stat?.isSymbolicLink() === true) throw refused("The save path is a symbolic link, which this tool never writes through.")
-    const parent = dirname(current)
-    if (parent === current || current === ancestor || !inside(current, root)) break
-    current = parent
+/**
+ * A path with every symbolic link resolved: the nearest existing ancestor through `realpath`, and the components below
+ * it, which do not exist yet and so cannot be links, appended as written. macOS's `/var` → `/private/var` and `/tmp` →
+ * `/private/tmp` are such links, and an agent's shell `pwd` is the logical name, so both sides of every comparison are
+ * real paths, never one real and one as typed.
+ */
+export function realOf(path: string): string {
+  const absolute = resolve(path)
+  const ancestor = nearestExisting(absolute)
+  let real: string
+  try {
+    real = realpathSync(ancestor)
+  } catch {
+    throw refused("A folder on the save path cannot be resolved.")
   }
+  const rest = relative(ancestor, absolute)
+  return rest === "" ? real : resolve(real, rest)
+}
+
+/**
+ * The target's real path, after every check that can be made before anything is written.
+ *
+ * The root is chosen by real paths on both sides (the target's, and each root's), so an alias of a root is the root,
+ * and a symbolic link inside a root that leads outside every root is refused (`SAVE_PATH_REFUSED`): what is compared is
+ * where the bytes would land. The answer is that real path, so OpenCode's `edit` and `external_directory` are asked for
+ * the place the file is written, and the write goes there, not through the link.
+ */
+export function resolveTarget(input: { readonly path: string; readonly overwrite?: boolean }, options: Options, cwd = workingDirectory()): SaveTarget {
+  const project = realOf(cwd)
+  const roots = [project, realOf(resolve(cwd, options.resultsDir)), ...options.allowedRoots.map((root) => realOf(resolve(cwd, root)))]
+  const typed = resolve(cwd, input.path)
+  // The file itself must not be a link: the rename would replace it, but a save never writes through one.
+  let own: ReturnType<typeof lstatSync> | undefined
+  try {
+    own = lstatSync(typed)
+  } catch {
+    own = undefined
+  }
+  if (own?.isSymbolicLink() === true) throw refused("The save path is a symbolic link, which this tool never writes through.")
+  const target = resolve(realOf(dirname(typed)), basename(typed))
+  const root = roots.filter((candidate) => inside(target, candidate)).sort((left, right) => right.length - left.length)[0]
+  if (root === undefined) {
+    throw refused(
+      roots.some((candidate) => inside(typed, candidate)) || inside(typed, resolve(cwd))
+        ? "The save path resolves outside the project, resultsDir and allowedRoots through a symbolic link."
+        : "The save path is outside the project, resultsDir and allowedRoots.",
+    )
+  }
+  if (target === root) throw refused("The save path is a folder, not a file.")
   if (existsSync(target)) {
     if (!lstatSync(target).isFile()) throw refused("The save path exists and is not a regular file.")
     if (input.overwrite !== true) {
       throw new BigQueryError("SAVE_EXISTS", "A file already exists at the save path.", "Choose another path, or pass overwrite: true after the user agrees.")
     }
   }
-  return { path: target, external: !inside(target, cwd) }
+  return { path: target, external: !inside(target, project) }
 }
 
 /** `edit` on the file, and `external_directory` on its folder when the file is outside the project. */
