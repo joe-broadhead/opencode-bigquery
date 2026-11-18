@@ -54,8 +54,9 @@ Then choose a level:
 - **Read and write** needs the form's acknowledgment and Google's consent screen, which lists the extra line
   *Insert data into Google BigQuery*.
 
-Every sign-in shows Google's consent screen and gets a new refresh token, bound with DPoP to a key this plugin keeps.
-The full detail, and what is stored where: [docs/auth.md](docs/auth.md).
+Every sign-in sends `prompt=consent`, so Google shows its consent screen, and asks Google to bind the new refresh token
+with DPoP to a key this plugin keeps; status says whether it did. The full detail, and what is stored where:
+[docs/auth.md](docs/auth.md).
 
 **At Read, Google issues a token that can change BigQuery data wherever your Google account is allowed to; this plugin
 never uses it to, but a program that can read both OpenCode's credential store and this plugin's key file could. For
@@ -101,9 +102,13 @@ base allow:
 
 | Value | What runs | What asks |
 | --- | --- | --- |
-| `"all"` (the default) | every tool, the five commits included, and any tool a later release adds | nothing |
-| `"ask-changes"` | the twelve reads and the two method-only reads | each of the five commits, `bigquery_save` and `bigquery_cancel` |
-| `"read-only"` | the twelve reads and the two method-only reads | nothing: those seven are denied |
+| `"all"` (the default) | every tool, the five commits included, and any tool a later release adds | nothing, except the uncapped read below |
+| `"ask-changes"` | the twelve reads and the two method-only reads | each of the five commits, `bigquery_save`, `bigquery_cancel`, and the uncapped read below |
+| `"read-only"` | the twelve reads and the two method-only reads | nothing: those seven are denied, and the uncapped read is denied too |
+
+The table is the block the plugin generates for local OpenCode. The uncapped read is the one run-time ask,
+`bigquery.uncapped_read`: local rules ask at `all` and `ask-changes` and deny at `read-only`. In Jelly, Jelly's own
+rules decide it: unasked at Allowed, asked at Ask before changes and Read only.
 
 The rules go directly after each agent's base `{ "action": "*", "resource": "*", "effect": "allow" }`; a later rule of
 yours still wins, and a commit also needs a Read and write sign-in whatever the rules say. Agents defined only in your
@@ -115,10 +120,10 @@ config get no block; `/bigquery-status` names them. Details and the rule block: 
   the byte caps, what was billed today, the agents without the default rules, and the next step. The TUI's
   **BigQuery: Status** dialog shows the same rows. Neither makes a request to Google.
 - `bigquery_status` is the model's version of the same, plus each account's level as the plugin's two §3.1 checks decide
-  it. Reading a level may refresh a token once in a process. `include: ["jobs"]` adds this account's running jobs (a
+  it, the reason a Read and write account is read, and a Read account's disclosure wording. Reading a level may refresh a token once in a process. `include: ["jobs"]` adds this account's running jobs (a
   free `jobs.list`), `include: ["iam"]` runs the IAM check below, and `include: ["spend"]` is the ledger the status
   always reads. The IAM check also runs once, by itself, at the first `bigquery_status` after a Read sign-in.
-- `/bigquery-doctor` makes one small free call per account: one `projects.list`, one dry run of `SELECT 1`, one
+- `/bigquery-doctor` makes a few free calls per account: one `projects.list`, one dry run of `SELECT 1`, one
   `datasets.list`, the level check and the IAM check.
 - `/bigquery-signout [alias]` deletes the account's DPoP key and forgets its tokens in memory. OpenCode keeps the
   stored refresh token until `/connect` or `opencode auth logout bigquery-<alias>` removes it; the command says which.
@@ -148,9 +153,11 @@ need an explicit `maxBytes`. The full account: [What it costs](docs/costs.md).
 
 ## Security
 
-The plugin's own requests go only to Google's BigQuery and OAuth endpoints; status and the status dialog make none.
-No option holds a secret, access tokens stay in memory, and the refresh token's DPoP key is a 0600 file in the
-plugin's state folder. See [SECURITY.md](SECURITY.md) and [docs/auth.md](docs/auth.md).
+The plugin's own requests go only to Google: BigQuery's REST API and OAuth endpoints, and, for an `adc` account, the
+endpoints its credential type itself uses (the metadata server, `iamcredentials.googleapis.com` for impersonation,
+`sts.googleapis.com` for an external-account credential). `/bigquery-status` and the status dialog make no request. No
+option holds a secret, access tokens stay in memory, and the refresh token's DPoP key is a 0600 file in the plugin's
+state folder. See [SECURITY.md](SECURITY.md) and [docs/auth.md](docs/auth.md).
 
 Inline results reach your model's provider. A dataset whose contract forbids that can be made save-only with
 `accounts.<alias>.inline.deny`, and any table with policy-tagged columns is save-only anyway (see Known limits).
@@ -254,10 +261,11 @@ applies.
   <https://myaccount.google.com/permissions>, and the result says so. Very frequent re-sign-ins on a client shared with
   other apps can retire an old token of theirs, because Google retires the oldest
   ([OAuth 2.0 for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)).
-- **Status does not yet show the device binding, the disclosure sentence or the last three errors**, and
-  `/bigquery-status` and the TUI do not show each account's level or run the IAM check: reading a level may refresh a
-  token, which only `bigquery_status` does. The disclosure in both wordings is in [docs/auth.md](docs/auth.md) and on the
-  sign-in form.
+- **Status shows a Read account's disclosure but not the device binding itself, the granted scopes or the last three
+  errors**, and `/bigquery-status` and the TUI do not show each account's level or run the IAM check: reading a level may
+  refresh a token, which only `bigquery_status` does. The disclosure is the form's pre-binding wording (which says status
+  will say) until the auth port exposes the binding, then the binding's own; the failed §3.1 check's reason is a `next`
+  step.
 - **A script cannot answer an ask.** The tools RPC refuses `bigquery_query({ planId })`: an uncapped read runs only from
   a session's tool, where the user sees its preview.
 
@@ -293,6 +301,9 @@ applies.
 - **The dry run does not report columns**, and a view or SQL routine whose body cannot be dry-run (authorised, legacy,
   or a statement other than a `SELECT`) is unresolved: the read needs a plan. Temporary functions are refused outright,
   and a JavaScript UDF is treated like an external effect, so it needs a plan and a Read and write account.
+- **A routine body's tables are followed conservatively**: whether a dry run still lists a table in a branch that a
+  typed `NULL` argument folds away is undocumented (live checks L7 and L13, `TODO(L7, L13)` in `guards/read.ts`), so a
+  body whose tables cannot be followed goes to a plan.
 - **`bigquery_job` fails closed on any job it did not prepare**: a view, routine, script or procedure puts the result
   in save-only, and the fence still applies. Its `jobs.get` lists are not subject to the 50-entry rule.
 - **Row-policy probes are a second request path**, bounded only by the 256 lookups, one metadata call and one dry run
@@ -323,9 +334,21 @@ applies.
 **Sources**
 
 - **Continuous queries never finish, so they are not in the `bigquery.jobs` source**, and a job that finishes later
-  than the 24-hour look-back is a gap. `jobs.delete` is not reported as a removal. The `bigquery.saved` source runs at
-  most 1 GiB per read by default, refuses a query whose cost cannot be bounded or that cannot use the cache (unless
-  `allowUncached`), and counts each read in the budget.
+  than the 24-hour look-back is lost silently in this version (not yet a gap). A page walks at most 10 `jobs.list`
+  calls, halving its creation-time window until the window fits, so a very busy identity is read in more, narrower
+  pages. `jobs.delete` is not reported as a removal.
+- **The `bigquery.saved` source** runs at most 1 GiB per read by default, refuses a query whose cost cannot be bounded
+  or that cannot use the cache (unless `allowUncached`), and counts each read in the budget. `bigquery_save` writes
+  NUMERIC and BIGNUMERIC values as text in JSONL and Parquet.
+
+**Changes**
+
+- **A change's target is not fenced or asserted for most statements.** BigQuery's dry run names a target only for
+  CREATE/DROP TABLE or VIEW, schema statements and CREATE/DROP routine
+  ([Job resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job)); for DML, `ALTER`, `TRUNCATE`,
+  `LOAD DATA`, scripts and `CALL` it names none, and whether `referencedTables` includes the table a DML statement
+  writes is unknown (live checks L7 and L13). A fence therefore bounds what a change **reads**, not what it writes; the
+  preview and IAM are the bounds there. A person's per-table rule is not consulted for such a target either.
 
 **Not measured yet**
 

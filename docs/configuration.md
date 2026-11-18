@@ -28,7 +28,7 @@ The options are the contract's (design §12). Every one is optional; the default
 | `allowAdcInHost` | boolean | `false` | Hosted Jelly only: allow Application Default Credentials. |
 | `maxBytesBilled` | bytes or a size such as `"10GiB"` | `"10GiB"` | The byte cap every job carries unless a call passes a lower or higher one. |
 | `maxBytesCeiling` | bytes or a size | `"100GiB"` | The highest cap a call may ask for. |
-| `budget` | `{ daily?, session?, action }` | none | An opt-in budget in bytes billed; `action` is `refuse` (default) or `warn`. |
+| `budget` | `{ daily?, session?, action }` | none | An opt-in budget in bytes billed; `action` is `refuse` (default) or `warn`, which runs the call and warns when 10 % or less of the budget is left. |
 | `onDemandUsdPerTiB`, `slotHourUsd` | number | `6.25`, none | Prices for the estimates. |
 | `maxRows`, `maxInlineBytes` | integer, bytes | `50`, `"32KiB"` | What a result carries inline. |
 | `maxSaveRows`, `maxSaveBytes` | integer, bytes | `1000000`, `"256MiB"` | The largest file `bigquery_save` writes. |
@@ -67,7 +67,8 @@ wildcards. A fenced read is refused with `DATASET_FENCED` on every path, sources
   `inline.deny` does the same with the `INLINE_DENIED` warning. The rows stay in the job's result table, and
   `bigquery_save` reads them from there.
 - **Status**: `/bigquery-status` and the TUI dialog make no request to Google; `bigquery_status` reads each account's
-  level (which may refresh a token once in a process) and runs the IAM check once after a Read sign-in. Its `include`
+  level (which may refresh a token once in a process), shows a Read account's disclosure, and runs the IAM check once
+  after a Read sign-in. Its `include`
   adds free checks: `jobs` lists running jobs, `iam` runs the IAM check, and `spend` is the ledger the status already
   reads. See the README's [Known limits](../README.md#known-limits) for what status cannot show yet.
 

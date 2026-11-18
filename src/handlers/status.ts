@@ -17,8 +17,9 @@
 import { iamCheck } from "../auth/doctor.js"
 import { takePendingIamCheck } from "../auth/state.js"
 import type { OutputOf } from "../domain/contract.js"
-import { BigQueryError } from "../domain/errors.js"
+import { BigQueryError, errorText } from "../domain/errors.js"
 import { ident, path } from "../domain/identifiers.js"
+import { DISCLOSURE } from "../domain/levels.js"
 import { localDayStart, usdFor, type Warning } from "../guards/cost.js"
 import { sessionHash } from "../guards/session.js"
 import { accountsOf } from "../options.js"
@@ -29,6 +30,13 @@ type StatusAccount = NonNullable<OutputOf<"status">["accounts"]>[number]
 
 /** The account settings status reads; the options schema fills every default. */
 type Account = { readonly mode?: string; readonly billingProject?: string; readonly location?: string }
+
+/**
+ * The device-binding accessor A adds to `AuthPort` (review bigquery-12, contract request 3). Status codes against its
+ * shape so the disclosure switches to the stored binding as soon as it lands; until then it answers undefined and the
+ * form's pre-binding wording is shown.
+ */
+type BindingAccessor = { readonly binding?: (account: string, signal: AbortSignal) => Promise<"bound" | "unbound" | undefined> }
 
 const status: Handlers["status"] = async (input, context) => {
   const { options, ports, call } = context
@@ -50,11 +58,26 @@ const status: Handlers["status"] = async (input, context) => {
     let level: StatusAccount["level"] = "read"
     try {
       // The one decision (design §3.1): `write` only when the sign-in record and Google's last refresh both say so.
-      level = (await ports.auth.level(alias, call.signal)).level
+      const decision = await ports.auth.level(alias, call.signal)
+      level = decision.level
+      // A sign-in that says Read and write but fails either check is refused for a reason (review LOW 2): say which,
+      // in the error's own words from codes, not a bare "read".
+      if (decision.level === "read" && decision.refusal !== "ACCOUNT_READ_ONLY") {
+        note(errorText(decision.refusal, `The account ${alias} is read because ${decision.why}`))
+      }
     } catch (error) {
       // An account that cannot get a token cannot commit either. Its next step is the error's own, never Google's text.
       if (!(error instanceof BigQueryError)) throw error
       note(error.next)
+    }
+    // The stored device binding, when the auth port can name it; never a Google call (review LOW 3, request 3).
+    let binding: "bound" | "unbound" | undefined
+    if (mode === "interactive") {
+      try {
+        binding = await (ports.auth as typeof ports.auth & BindingAccessor).binding?.(alias, call.signal)
+      } catch {
+        binding = undefined
+      }
     }
     accounts.push({
       alias,
@@ -62,7 +85,12 @@ const status: Handlers["status"] = async (input, context) => {
       level,
       ...(account.billingProject !== undefined ? { billingProject: account.billingProject } : {}),
       ...(account.location !== undefined ? { location: account.location } : {}),
-      // `binding` and `disclosure` are shown when the auth port can name the device binding; see Known limits.
+      ...(binding !== undefined ? { binding } : {}),
+      // A Read account carries the disclosure: the binding's own wording once Google has answered, and the form's
+      // pre-binding sentence (which says status will say) until then.
+      ...(mode === "interactive" && level === "read"
+        ? { disclosure: binding !== undefined ? DISCLOSURE[binding] : `${DISCLOSURE.bound} ${DISCLOSURE.formSuffix}` }
+        : {}),
     })
     if (mode !== "interactive") warn.push({ code: "HEADLESS_IDENTITY", message: `The account ${alias} is a ${mode} account: its queries run as that principal, not as you.` })
   }

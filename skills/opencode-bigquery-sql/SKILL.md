@@ -8,10 +8,11 @@ If BigQuery's tools are absent, run `/connect` and choose BigQuery to sign in, o
 
 The plugin runs GoogleSQL, BigQuery's standard SQL ([Query syntax](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax)).
 Legacy SQL is refused (`LEGACY_SQL_REFUSED`). BigQuery bills the bytes a query **reads**, so these rules decide the cost
-before the query runs:
+before the query runs; every `sql` block here is a complete statement the plugin accepts.
 
 1. **Filter the partition column.** A filtered partitioned table's estimate is precise and only those partitions are
-   read ([Query partitioned tables](https://cloud.google.com/bigquery/docs/querying-partitioned-tables)).
+   read ([Query partitioned tables](https://cloud.google.com/bigquery/docs/querying-partitioned-tables); [Best practices
+   for costs](https://cloud.google.com/bigquery/docs/best-practices-costs)).
 2. **Name the columns.** `SELECT *` reads every column. `LIMIT` does not reduce the bytes read
    ([Best practices for costs](https://cloud.google.com/bigquery/docs/best-practices-costs)).
 3. **Aggregate in BigQuery**, not in the model: `COUNT`, `SUM`, `APPROX_COUNT_DISTINCT`, `APPROX_QUANTILES`.
@@ -24,44 +25,58 @@ Pass values as parameters, never pasted into the SQL text
 ([Parameterized queries](https://cloud.google.com/bigquery/docs/parameterized-queries)):
 
 ```sql
+-- Run with params: { "corpus": "hamlet", "min": 10 }
 SELECT word, SUM(word_count) AS n
 FROM `bigquery-public-data.samples.shakespeare`
 WHERE corpus = @corpus AND word_count > @min
-GROUP BY word ORDER BY n DESC LIMIT 10
+GROUP BY word
+ORDER BY n DESC
+LIMIT 10
 ```
 
-`query({ sql, params: { corpus: "hamlet", min: 10 } })` sends `@corpus` and `@min`. Positional `?` parameters take an
-array. STRING, BOOL, INT64, FLOAT64 and arrays of them are inferred; a STRUCT or NULL needs an explicit type, and an
-INT64 above 2^53 loses precision as a JSON number, so pass it as a string and `CAST` it.
+The input carries values only, so the type comes from the JavaScript value: strings, booleans, integers, floats and
+arrays of them are inferred. A `STRUCT` or a `null` has no type the input can express: pass it as a JSON string and
+`CAST` it in the SQL (`CAST(@p AS STRUCT<a INT64>)`). An integer above 2^53 loses precision as a JSON number, so pass it
+as a string and `CAST` it too. Positional `?` parameters take an array.
 
 ## Dates and partitions
 
-A date-partitioned table reads only the partitions the filter names:
-
 ```sql
+-- Your own date-partitioned table: the DATE column `event_date` is its partition column.
 SELECT COUNT(*) AS events
-FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_*`
-WHERE _TABLE_SUFFIX BETWEEN '20201101' AND '20201130'
-  AND event_name = 'purchase'
+FROM `my-project.my_dataset.events`
+WHERE event_date = DATE '2026-11-01'
 ```
 
-A **wildcard table** is a change to this plugin's guards: nothing can tell which tables a `_TABLE_SUFFIX` selection
-reads, so the read needs a plan. Prefer one table or an `INFORMATION_SCHEMA` view for a read that should run inline.
-`requirePartitionFilter` tables refuse a query with no partition filter; `_PARTITIONTIME` is the ingestion-time
+```sql
+SELECT COUNT(*) AS rows_loaded
+FROM `my-project.my_dataset.events`
+WHERE _PARTITIONTIME = TIMESTAMP '2026-11-01'
+```
+
+A `requirePartitionFilter` table refuses a query that filters no partition; `_PARTITIONTIME` is the ingestion-time
 pseudo-column ([Query partitioned tables](https://cloud.google.com/bigquery/docs/querying-partitioned-tables)).
+
+A **wildcard table** is a change to this plugin's guards: nothing can tell which tables a `_TABLE_SUFFIX` selection
+reads, so the read needs a plan ([Querying wildcard tables](https://cloud.google.com/bigquery/docs/querying-wildcard-tables)).
+Prefer one table or an `INFORMATION_SCHEMA` view for a read that should run inline.
 
 ## QUALIFY
 
-`QUALIFY` filters a window function's result, so "one row per key" needs no subquery
+`QUALIFY` filters a window function's result, so "one row per group" needs no subquery
 ([QUALIFY](https://cloud.google.com/bigquery/docs/reference/standard-sql/query-syntax#qualify_clause)):
 
 ```sql
-SELECT repo_name, commit AS latest_commit, author.date AS authored
-FROM `bigquery-public-data.github_repos.commits`
-WHERE author.date >= '2020-01-01'
-QUALIFY ROW_NUMBER() OVER (PARTITION BY repo_name ORDER BY author.date DESC) = 1
-LIMIT 100
+SELECT state, year, name, number
+FROM `bigquery-public-data.usa_names.usa_1910_current`
+WHERE year BETWEEN 1990 AND 2000 AND gender = 'F'
+QUALIFY ROW_NUMBER() OVER (PARTITION BY state, year ORDER BY number DESC) = 1
+ORDER BY state, year
+LIMIT 51
 ```
+
+A bare column named like a statement keyword (such as `commit`) makes the lexer refuse the `SELECT`; quote it
+(`` `commit` ``) or rename it.
 
 ## UNNEST
 
@@ -75,9 +90,9 @@ WHERE event_name = 'page_view'
 LIMIT 20
 ```
 
-`ARRAY_AGG(x IGNORE NULLS ORDER BY t LIMIT 10)` builds an array back, and `(SELECT AS STRUCT …)` nests a struct. Never
-use a bare table alias as a value (`SELECT t`, `TO_JSON(t)`, `ARRAY_AGG(t)`) over a table with tagged columns: the
-result becomes save-only.
+`ARRAY_AGG(x IGNORE NULLS ORDER BY t LIMIT 10)` builds an array back, and `(SELECT AS STRUCT …)` nests a struct. A table
+with policy-tagged columns makes the result save-only however the columns are named, because the dry run reports no
+columns.
 
 ## SAFE functions
 
@@ -85,9 +100,13 @@ A `SAFE.` prefix turns an error into `NULL` for that row instead of failing the 
 ([SAFE](https://cloud.google.com/bigquery/docs/reference/standard-sql/functions-and-operators#safe_prefix)):
 
 ```sql
-SELECT SAFE_DIVIDE(SUM(clicks), SUM(impressions)) AS ctr,
-       SAFE_CAST(payload AS INT64) AS n
+SELECT word, word_count,
+       SAFE_DIVIDE(word_count, corpus_date) AS words_per_corpus_year,
+       SAFE_CAST(corpus_date AS STRING) AS corpus_year
 FROM `bigquery-public-data.samples.shakespeare`
+WHERE corpus = 'hamlet'
+ORDER BY word_count DESC
+LIMIT 20
 ```
 
 `SAFE_CAST`, `SAFE_DIVIDE` and `SAFE_OFFSET` are the common ones. `SAFE.AI.…` and `SAFE.ML.…` are still external
@@ -122,20 +141,21 @@ Each dataset has `INFORMATION_SCHEMA` views; they bill at least 10 MB and never 
 ([Introduction to INFORMATION_SCHEMA](https://cloud.google.com/bigquery/docs/information-schema-intro)):
 
 ```sql
--- Tables in a dataset, with their sizes.
 SELECT table_name, table_type, size_bytes, row_count
 FROM `bigquery-public-data.samples.INFORMATION_SCHEMA.TABLES`
-ORDER BY size_bytes DESC;
+ORDER BY size_bytes DESC
+```
 
--- Columns with their types and policy tags.
+```sql
 SELECT column_name, data_type, policy_tags
 FROM `bigquery-public-data.samples.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS`
-WHERE table_name = 'shakespeare';
+WHERE table_name = 'shakespeare'
+```
 
--- A table's partitions.
+```sql
 SELECT partition_id, total_rows, total_logical_bytes
 FROM `bigquery-public-data.samples.INFORMATION_SCHEMA.PARTITIONS`
-ORDER BY total_rows DESC;
+ORDER BY total_rows DESC
 ```
 
 `bigquery_search` and `bigquery_table` read these for you. A region- or project-qualified `INFORMATION_SCHEMA` reference
@@ -143,19 +163,104 @@ is refused while the account has an allow fence.
 
 ## Worked examples
 
-Each of these reads Google's public data (`bigquery-public-data`) and bills at least the 10 MB minimum on the billing
-project, so estimate first.
+Each of these reads Google's public data and bills at least the 10 MB minimum on the billing project, so estimate first.
 
-1. `SELECT word, SUM(word_count) AS n FROM bigquery-public-data.samples.shakespeare WHERE corpus = 'hamlet' GROUP BY word ORDER BY n DESC LIMIT 20`
-2. `SELECT year, SUM(weight_pounds) AS pounds FROM bigquery-public-data.samples.natality WHERE year BETWEEN 1990 AND 2000 GROUP BY year ORDER BY year`
-3. `SELECT name, SUM(number) AS n FROM bigquery-public-data.usa_names.usa_1910_current WHERE year = 2000 AND gender = 'F' GROUP BY name ORDER BY n DESC LIMIT 25`
-4. `SELECT tag, COUNT(*) AS questions FROM bigquery-public-data.stackoverflow.posts_questions, UNNEST(SPLIT(tags, '|')) AS tag WHERE creation_date >= '2020-01-01' GROUP BY tag ORDER BY questions DESC LIMIT 20`
-5. `SELECT start_station_name, COUNT(*) AS hires FROM bigquery-public-data.london_bicycles.cycle_hire WHERE EXTRACT(YEAR FROM start_date) = 2020 GROUP BY start_station_name ORDER BY hires DESC LIMIT 20`
-6. `SELECT EXTRACT(YEAR FROM date) AS year, EXTRACT(MONTH FROM date) AS month, AVG(temp) AS temp FROM bigquery-public-data.noaa_gsod.gsod2020 GROUP BY year, month ORDER BY year, month`
-7. `SELECT user_pseudo_id, event_name, event_timestamp FROM bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_20201101 QUALIFY ROW_NUMBER() OVER (PARTITION BY user_pseudo_id ORDER BY event_timestamp DESC) = 1 LIMIT 100`
-8. `SELECT COUNT(*) FROM (SELECT 1 FROM bigquery-public-data.samples.shakespeare TABLESAMPLE SYSTEM (1 PERCENT))`
-9. `SELECT table_name, size_bytes FROM bigquery-public-data.crypto_bitcoin.INFORMATION_SCHEMA.TABLES ORDER BY size_bytes DESC LIMIT 20`
-10. `SELECT name, SUM(number) AS n FROM bigquery-public-data.usa_names.usa_1910_current WHERE state = @state AND year = @year GROUP BY name ORDER BY n DESC LIMIT 10`, with `{ state: "WY", year: 2000 }`.
+1. **Count words in a play.**
+
+   ```sql
+   SELECT word, SUM(word_count) AS n
+   FROM `bigquery-public-data.samples.shakespeare`
+   WHERE corpus = 'hamlet'
+   GROUP BY word
+   ORDER BY n DESC
+   LIMIT 20
+   ```
+
+2. **Births by year.**
+
+   ```sql
+   SELECT year, SUM(number) AS births
+   FROM `bigquery-public-data.usa_names.usa_1910_current`
+   WHERE year BETWEEN 1990 AND 2000
+   GROUP BY year
+   ORDER BY year
+   ```
+
+3. **The most common female names in 2000.**
+
+   ```sql
+   SELECT name, SUM(number) AS n
+   FROM `bigquery-public-data.usa_names.usa_1910_current`
+   WHERE year = 2000 AND gender = 'F'
+   GROUP BY name
+   ORDER BY n DESC
+   LIMIT 25
+   ```
+
+4. **The tags with the most questions.**
+
+   ```sql
+   SELECT tag_name, `count` AS questions
+   FROM `bigquery-public-data.stackoverflow.tags`
+   ORDER BY questions DESC
+   LIMIT 20
+   ```
+
+5. **Bike hires per station in 2020.**
+
+   ```sql
+   SELECT start_station_name, COUNT(*) AS hires
+   FROM `bigquery-public-data.london_bicycles.cycle_hire`
+   WHERE EXTRACT(YEAR FROM start_date) = 2020
+   GROUP BY start_station_name
+   ORDER BY hires DESC
+   LIMIT 20
+   ```
+
+6. **A monthly weather average.**
+
+   ```sql
+   SELECT EXTRACT(YEAR FROM date) AS year, EXTRACT(MONTH FROM date) AS month, AVG(temp) AS temp
+   FROM `bigquery-public-data.noaa_gsod.gsod2020`
+   GROUP BY year, month
+   ORDER BY year, month
+   ```
+
+7. **The latest event per user.**
+
+   ```sql
+   SELECT user_pseudo_id, event_name, event_timestamp
+   FROM `bigquery-public-data.ga4_obfuscated_sample_ecommerce.events_20201101`
+   QUALIFY ROW_NUMBER() OVER (PARTITION BY user_pseudo_id ORDER BY event_timestamp DESC) = 1
+   LIMIT 100
+   ```
+
+8. **A 1 % sample, counted.**
+
+   ```sql
+   SELECT COUNT(*) AS sampled_rows
+   FROM (SELECT 1 FROM `bigquery-public-data.samples.shakespeare` TABLESAMPLE SYSTEM (1 PERCENT))
+   ```
+
+9. **A dataset's tables by size.**
+
+   ```sql
+   SELECT table_name, size_bytes
+   FROM `bigquery-public-data.crypto_bitcoin.INFORMATION_SCHEMA.TABLES`
+   ORDER BY size_bytes DESC
+   LIMIT 20
+   ```
+
+10. **A lookup for one state and year.**
+
+    ```sql
+    SELECT name, SUM(number) AS n
+    FROM `bigquery-public-data.usa_names.usa_1910_current`
+    WHERE state = 'WY' AND year = 2000
+    GROUP BY name
+    ORDER BY n DESC
+    LIMIT 10
+    ```
 
 ## What the plugin refuses before Google runs anything
 

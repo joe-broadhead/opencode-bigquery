@@ -1,10 +1,12 @@
 // Package F's unit suite for `bigquery_status` (design §13): the accounts and levels, the caps, the ledger's spend, and
 // the free checks `include` adds. Nothing here reaches Google: the Day 0 fakes answer every port.
 import { describe, expect, it } from "vitest"
+import { authState } from "../../../src/auth/state.js"
 import { StatusOutput } from "../../../src/domain/contract.js"
 import { BigQueryError } from "../../../src/domain/errors.js"
+import { DISCLOSURE } from "../../../src/domain/levels.js"
 import { sessionHash } from "../../../src/guards/session.js"
-import { writeRecord } from "../../fake/ports.js"
+import { readRecord, writeRecord, type FakeAuth } from "../../fake/ports.js"
 import { ACCOUNT, LOCATION, PROJECT, callsOf, harness, runTool, twoAccounts } from "./support.js"
 
 /** The contract's own shape: every result is checked against the schema the model and scripts see. */
@@ -24,6 +26,30 @@ describe("bigquery_status", () => {
     expect(asserted).toHaveLength(1)
     expect(asserted[0]).toMatchObject({ action: "bigquery.status", resources: ["*"] })
     expect(h.bigquery.calls).toEqual([])
+  })
+
+  it("shows a Read account's disclosure in the form's pre-binding wording until the binding accessor answers", async () => {
+    const h = harness()
+    const plain = await runTool(h, "status", {})
+    const account = (shape(plain.output).accounts as { binding?: string; disclosure?: string }[])[0]!
+    expect(account.binding).toBeUndefined()
+    expect(account.disclosure).toBe(`${DISCLOSURE.bound} ${DISCLOSURE.formSuffix}`)
+
+    // The accessor A adds (contract request 3) switches the wording, and names the binding itself.
+    ;(h.auth as FakeAuth & { binding?: (account: string, signal: AbortSignal) => Promise<"bound" | "unbound" | undefined> }).binding = async () => "unbound"
+    const { output } = await runTool(h, "status", {})
+    const bound = (shape(output).accounts as { binding?: string; disclosure?: string }[])[0]!
+    expect(bound.binding).toBe("unbound")
+    expect(bound.disclosure).toBe(DISCLOSURE.unbound)
+  })
+
+  it("says why a Read and write sign-in is read when a §3.1 check fails", async () => {
+    // The record says write, but Google's refresh does not return the marker: WRITE_LEVEL_UNVERIFIED, not a bare read.
+    const h = harness({ mode: "interactive", record: writeRecord(), refreshScopes: ["https://www.googleapis.com/auth/bigquery"] })
+    const { output } = await runTool(h, "status", {})
+    expect((shape(output).accounts as { level: string }[])[0]!.level).toBe("read")
+    expect(String(output.next)).toContain("WRITE_LEVEL_UNVERIFIED")
+    expect(String(output.next)).toContain("write marker")
   })
 
   it("decides the level from both §3.1 checks: a write record and the marker make write", async () => {
@@ -111,6 +137,28 @@ describe("bigquery_status", () => {
     h.bigquery.on("listDatasets", async () => ({ items: [] }))
     const { output } = await runTool(h, "status", { include: ["iam"] })
     expect((shape(output).warnings as { code: string }[]).map((warning) => warning.code)).toContain("SCOPE_WIDER_THAN_LEVEL")
+  })
+
+  it("runs the IAM check once at the first status after a Read sign-in, consuming the pending marker", async () => {
+    const h = harness()
+    authState(h.options).iamPending.add(`${ACCOUNT}|key-invented-1`)
+    h.bigquery.on("listDatasets", async () => ({ items: [{ ref: { projectId: PROJECT, datasetId: "sales" } }] }))
+    h.bigquery.on("listTables", async () => ({ items: [{ tableReference: { projectId: PROJECT, datasetId: "sales", tableId: "orders" } }] }))
+    h.bigquery.on("testTablePermissions", async () => ["bigquery.tables.updateData"])
+    const first = await runTool(h, "status", {})
+    const second = await runTool(h, "status", {})
+    expect(callsOf(h.bigquery, "testTablePermissions")).toHaveLength(1)
+    expect(shape(first.output).warnings).toMatchObject([{ code: "IDENTITY_CAN_WRITE" }])
+    expect(shape(second.output).warnings).toBeUndefined()
+    expect(authState(h.options).iamPending.size).toBe(0)
+  })
+
+  it("keeps a pending IAM marker when the account has no billingProject", async () => {
+    const h = harness({ mode: "interactive", record: readRecord(), refreshScopes: [] }, { accounts: { default: { mode: "interactive" } } })
+    authState(h.options).iamPending.add(`${ACCOUNT}|key-invented-1`)
+    await runTool(h, "status", {})
+    expect(authState(h.options).iamPending.has(`${ACCOUNT}|key-invented-1`)).toBe(true)
+    expect(callsOf(h.bigquery, "testTablePermissions")).toEqual([])
   })
 
   it("accepts include: spend, which is the ledger the status always reads, and never queries Google", async () => {

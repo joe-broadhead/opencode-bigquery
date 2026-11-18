@@ -14,7 +14,9 @@ Report a vulnerability privately through GitHub's security advisories for this r
 
 The plugin's own requests go only to Google: BigQuery's REST API (`bigquery.googleapis.com`) and Google's OAuth
 endpoints (`oauth2.googleapis.com`, `accounts.google.com`). The opt-in `adc` mode also reads the environment's
-Application Default Credentials (a key file, gcloud's file, or the metadata server). No request goes anywhere else.
+Application Default Credentials (a key file, gcloud's file, or the metadata server), and those credential types call
+`iamcredentials.googleapis.com` when impersonating a service account and `sts.googleapis.com` for an external-account
+(WIF) credential, plus whatever token source that credential itself names. No other request goes anywhere else.
 
 `/bigquery-status` and the TUI dialog make no request to Google: they read OpenCode's state, the plugin's options and
 the local spend ledger. `bigquery_status` reads each account's level (which may refresh its token once in a process, a

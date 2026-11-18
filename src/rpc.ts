@@ -115,7 +115,7 @@ export function formatRules(rules: readonly Rule[]): string {
 }
 
 const ACCESS_TEXT: Record<Access, string> = {
-  all: "every tool runs without asking, changes included",
+  all: "every tool runs without asking, changes included; locally, a read the byte cap cannot bound still asks",
   "ask-changes": "reads run without asking; every commit, save and cancel asks first",
   "read-only": "reads run without asking; every commit, save and cancel is denied",
 }

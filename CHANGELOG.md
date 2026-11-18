@@ -35,15 +35,16 @@ All notable changes to this project are documented here. The format follows [Kee
 - The reads and guards (package C): the GoogleSQL lexer, expansion of views and routines (bounded), the side-effect,
   dataset-fence, cap-enforceability, cost and policy-tag guards, the spend ledger and budgets, hints, and the eight read
   tools with a sample, partitions, search, estimate, query, job, jobs and profile.
-- `bigquery_status` (package F): each account's level from the two §3.1 checks, the byte caps, today's and this
-  session's bytes and dollars from the ledger, the free checks `include` adds (`jobs`, `iam`, `spend`), and the warnings
-  a person needs. The status RPC, `/bigquery-status` and the TUI add the accounts, dataset fences, caps, budget and
-  today's billed bytes as rows.
+- `bigquery_status` (package F): each account's level from the two §3.1 checks (with the reason when one fails), a
+  Read account's disclosure, the byte caps, today's and this session's bytes and dollars from the ledger, the free
+  checks `include` adds (`jobs`, `iam`, `spend`), and the warnings a person needs. The status RPC, `/bigquery-status`
+  and the TUI add the accounts, dataset fences, caps, budget and today's billed bytes as rows.
 - `docs/costs.md` and `docs/sql.md`, and a rewritten README with a **Known limits** section: the cap's real guarantee,
   policy-tagged results, uncapped reads under Jelly's Allowed, the expansion caps, the fail-closed cases, Stop's worst
   case, and the live checks still to run.
 - A check-gate guard that fails the TUI bundle if it carries a minified host import
-  (`test/unit/status/tui-bundle.test.ts`), against OpenTUI's own rewrite patterns.
+  (`test/unit/status/tui-bundle.test.ts`), against OpenTUI's own rewrite patterns, and one that runs every SQL example
+  the docs and the SQL skill show through the read path, so an example the plugin refuses fails the build.
 
 ### Changed
 

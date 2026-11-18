@@ -60,7 +60,7 @@ and a `next`. A job still running answers `state: "running"` with a `next` that 
 - `LIMIT` does not reduce the bytes read. Filter on the partition column, name the columns instead of `SELECT *`, and
   aggregate in BigQuery (`COUNT`, `SUM`, `APPROX_COUNT_DISTINCT`, `APPROX_QUANTILES`).
 - `profile({ table })` or `profile({ sql })` writes one aggregate query for a table: nulls, distinct estimates,
-  min/max, quantiles and the top 5 values. It refuses tagged columns unless the account's `policyTagged` is `"allow"`.
+  min/max, quantiles and the top 5 values. It refuses tagged columns unless the plugin's `policyTagged` option is `"allow"`.
 - `job({ project, jobId, location, wait? })` reads one job and a page of its results; `jobs({ project })` lists this
   account's jobs. Both are free.
 
@@ -109,15 +109,15 @@ the new preview. A commit re-checks the plan and answers `PLAN_CHANGED` when the
 `admin` plan needs `reason`. Scripts need an explicit `maxBytes` and run with a 300-second limit; `SCRIPT_REFUSED`
 means the account's `scripts` option is off.
 
-By default every tool runs without asking. With `access: "ask-changes"` OpenCode asks before each commit, save and
-cancel; a rejection runs nothing, so do not retry unless the user asks. At `"read-only"` those seven are denied and
-`plan` still previews.
+By default every tool runs without asking; locally, a read the byte cap cannot bound still asks. With
+`access: "ask-changes"` OpenCode asks before each commit, save and cancel; a rejection runs nothing, so do not retry
+unless the user asks. At `"read-only"` those seven are denied and `plan` still previews.
 
 ## Policy-tagged columns
 
-A table with policy-tagged columns makes the result **save-only**: no rows inline, unless the account's
-`policyTagged` is `"allow"`. That is because BigQuery's dry run names the tables a query reads but not its columns. The
-rows stay in the job's result table: save them with `save`, or ask the user to allow tagged values.
+A table with policy-tagged columns makes the result **save-only**: no rows inline, unless the plugin's `policyTagged`
+option is `"allow"`. That is because BigQuery's dry run names the tables a query reads but not its columns. The rows
+stay in the job's result table: save them with `save`, or ask the user to allow tagged values.
 
 ## Results say what happened
 
