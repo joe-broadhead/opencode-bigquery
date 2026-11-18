@@ -20,7 +20,7 @@ import { operationResource } from "../domain/accounts.js"
 import type { InputOf, OutputOf } from "../domain/contract.js"
 import { BigQueryError } from "../domain/errors.js"
 import { requireWrite } from "../domain/levels.js"
-import { type Plan, planMetadata } from "../domain/plans.js"
+import { type Plan, type PlannedStatement } from "../domain/plans.js"
 import type { HandlerContext } from "../registry.js"
 import { asCallError } from "../guards/callerrors.js"
 import { capAndBudget, usdFor } from "../guards/cost.js"
@@ -28,8 +28,11 @@ import { failureFor } from "../guards/jobfail.js"
 import { prepareRead, readContext, type PreparedRead } from "../guards/read.js"
 import { sessionHash } from "../guards/session.js"
 import type { JobStatus, RunRequest } from "../ports.js"
-import { assertTargetsFenced, classify, type Classification } from "./plan.js"
-import { changeStatistics, targetsOf } from "./statistics.js"
+import { approvalMetadata, scriptOf } from "./approval.js"
+import { assertChangeTargets, assertTargetsFenced, checkTargets, classify, hasFence, type Classification } from "./plan.js"
+import { scriptStatements, sameScript, type ScriptStatementInput } from "./scripts.js"
+import { changeStatistics, changeTargets, sameTargets, type PlanTarget, targetsOf, unionTargets, type Target } from "./statistics.js"
+import { statementTarget } from "./statement-target.js"
 
 export type CommitName = "write" | "export" | "share" | "delete" | "admin"
 
@@ -48,6 +51,10 @@ const WAIT_ATTEMPTS = 20
 
 /** A commit by its plan id, for every commit tool (`CommitInput`). */
 export type CommitInputOf = InputOf<"write">
+
+/** The plan's `PlannedStatement.targets` view of contract amendment 3, until contract/d-amendments is on master. */
+type StructuredStatement = Omit<PlannedStatement, "targets"> & { readonly targets: readonly PlanTarget[] }
+type StructuredPlan = Omit<Plan, "statement"> & { readonly statement: StructuredStatement }
 
 /**
  * Commits one plan with the tool that owns its category. The registry left the ports guarded until this handler asserts
@@ -71,7 +78,7 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
       resources: [resource],
       // “Always” only where the action table allows it: never for a destructive plan.
       ...(entry.savable === false ? {} : { save: [resource] }),
-      metadata: planMetadata(plan),
+      metadata: approvalMetadata(plan),
     })
 
     // No commit at the read level, whatever the config says: the decision is Google's grant through package A.
@@ -91,10 +98,58 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
       "inspect",
     )
     const statistics = changeStatistics(prepared.statistics)
-    const freshTargets = targetsOf(statistics, prepared.statementType, statistics.referencedTables ?? [])
-    // A DDL/DCL target is not in the referenced lists, so the fence is checked on it again here: the account's
-    // `datasets` option may have changed between the plan and the commit.
-    assertTargetsFenced(rc.settings.fence, freshTargets)
+    const wholeTargets = targetsOf(statistics, prepared.statementType, statistics.referencedTables ?? [])
+    let freshTargets: Target[]
+    let freshReferences: Target[] = []
+    if (prepared.statementType === "SCRIPT") {
+      const plannedScript = scriptOf(plan)
+      if (plannedScript === undefined) {
+        throw new BigQueryError("PLAN_CHANGED", "The plan has no record of the script's statements, so the commit cannot re-check them", "Plan again and show the user the new preview.")
+      }
+      const freshScript = await scriptStatements({
+        ports: context.ports,
+        account: context.account,
+        project: prepared.project,
+        location: prepared.location,
+        ...(prepared.params !== undefined ? { params: prepared.params } : {}),
+        signal: context.call.signal,
+        sql: plan.statement.sql,
+      })
+      for (const statement of freshScript) {
+        if (!statement.determined) {
+          if (hasFence(rc.settings.fence)) {
+            throw new BigQueryError(
+              "DATASET_FENCED",
+              "One of the script's statements could not be dry-run on its own, so its target cannot be verified against the account's dataset fence",
+              "Split the script into statements, replace variables or temporary tables with dataset tables, or ask the user to remove the fence.",
+            )
+          }
+          continue
+        }
+        checkTargets(rc.settings.fence, statement.type, statement.targets, "statement")
+        assertTargetsFenced(rc.settings.fence, statement.references)
+      }
+      assertTargetsFenced(rc.settings.fence, wholeTargets)
+      if (!sameScript(plannedScript.statements, freshScript)) {
+        throw new BigQueryError("PLAN_CHANGED", "The script's statements changed since the plan was made", "Plan again and show the user the new preview.")
+      }
+      freshTargets = unionTargets(wholeTargets, ...freshScript.map((statement) => statement.targets))
+      freshReferences = unionTargets(...freshScript.map((statement) => statement.references))
+    } else {
+      // A DDL/DCL target is not in the referenced lists, so the fence is checked on it again here: the account's
+      // `datasets` option may have changed between the plan and the commit. A DML's destination comes from its own
+      // leading keywords; its referenced tables stay with package C's assert.
+      freshTargets = changeTargets(wholeTargets, statementTarget(plan.statement.sql, prepared.statementType, prepared.project))
+      checkTargets(rc.settings.fence, prepared.statementType, freshTargets, "statement")
+    }
+    await assertChangeTargets({
+      call: context.call,
+      account: context.account,
+      action: entry.action,
+      via: `bigquery_${name}`,
+      targets: freshTargets,
+      ...(freshReferences.length > 0 ? { references: freshReferences } : {}),
+    })
     let classification: Classification
     try {
       classification = classify(prepared, context.options, {
@@ -253,15 +308,14 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
 }
 
 /** Whether two plans differ in a way design §5.2 calls `PLAN_CHANGED`. */
-function changed(plan: Plan, prepared: PreparedRead, classification: Classification, freshTargets: ReturnType<typeof targetsOf>): string | undefined {
+function changed(plan: Plan, prepared: PreparedRead, classification: Classification, freshTargets: readonly PlanTarget[]): string | undefined {
   if (classification.category !== plan.category) {
     return `The statement now classifies as ${classification.category}, and the plan was made as ${plan.category}`
   }
   if (prepared.statementType !== plan.statement.statementType) {
     return `The statement now parses as ${prepared.statementType}, and the plan was made for ${plan.statement.statementType}`
   }
-  const fresh = freshTargets.map((target) => target.label)
-  if (!sameSet(fresh, plan.statement.targets)) return "The statement's targets changed since the plan was made"
+  if (!sameTargets(freshTargets, (plan as unknown as StructuredPlan).statement.targets)) return "The statement's targets changed since the plan was made"
   if (prepared.location !== plan.statement.location) return "The statement's location changed since the plan was made"
   if (classification.capEnforceable !== plan.statement.capEnforceable) {
     return "Whether the byte cap bounds the statement changed since the plan was made"
@@ -270,11 +324,6 @@ function changed(plan: Plan, prepared: PreparedRead, classification: Classificat
   return undefined
 }
 
-function sameSet(left: readonly string[], right: readonly string[]): boolean {
-  const a = [...left].sort()
-  const b = [...right].sort()
-  return a.length === b.length && a.every((value, index) => value === b[index])
-}
 
 /** Long-poll a started job with `getQueryResults`, then read its final state; a DDL job may have no results to page. */
 async function awaitJob(context: HandlerContext, started: JobStatus, deadline: number): Promise<{ status: JobStatus; done: boolean }> {

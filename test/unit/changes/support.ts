@@ -169,6 +169,14 @@ export function statistics(overrides: Partial<ChangeStatistics> = {}): ChangeSta
   }
 }
 
+/** A job this plugin started: the `oc_` id and the server-side label the cancel ownership check requires. */
+export function pluginJob(overrides: Partial<JobStatus> = {}): JobStatus {
+  return jobStatus({
+    labels: { oc_plugin: "opencode-bigquery", oc_tool: "bigquery_query", oc_session: "0123456789abcdef" },
+    ...overrides,
+  })
+}
+
 export function jobStatus(overrides: Partial<JobStatus> = {}): JobStatus {
   return {
     ref: { projectId: PROJECT, jobId: "oc_00000000-0000-4000-8000-000000000001", location: LOCATION },
@@ -207,6 +215,17 @@ export function scriptDryRuns(bigquery: FakeBigQuery, answers: readonly DryRunSc
     checkDryRun(request as unknown as Record<string, unknown>)
     const answer = answers[Math.min(index, answers.length - 1)]!
     index += 1
+    if (answer.error !== undefined) throw answer.error
+    return { location: answer.location ?? LOCATION, ...(answer.statistics !== undefined ? { statistics: answer.statistics } : {}) }
+  })
+}
+
+/** A dry-run answer chosen by the SQL text, for a script whose statements are dry-run one by one. */
+export function scriptDryRunsBySql(bigquery: FakeBigQuery, answerFor: (sql: string) => DryRunScript): void {
+  bigquery.on("dryRun", async (request) => {
+    checkDryRun(request as unknown as Record<string, unknown>)
+    const sql = (request as { readonly sql: string }).sql
+    const answer = answerFor(sql)
     if (answer.error !== undefined) throw answer.error
     return { location: answer.location ?? LOCATION, ...(answer.statistics !== undefined ? { statistics: answer.statistics } : {}) }
   })

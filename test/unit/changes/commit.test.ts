@@ -2,6 +2,9 @@
 // preview, requires the write level (Google's grant, not config), re-runs the dry run and refuses every PLAN_CHANGED
 // cause, runs with the plan's cap and time limit, records the ledger, and answers the affected rows and the DDL
 // operation. A Read account commits nothing, whatever the config says.
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { ASKS } from "../../../src/domain/actions.js"
 import { BigQueryError } from "../../../src/domain/errors.js"
@@ -17,6 +20,7 @@ import {
   resultPage,
   runTool,
   scriptChange,
+  scriptDryRunsBySql,
   signedIn,
   statistics,
   tableRef,
@@ -328,6 +332,96 @@ describe("a commit that ran: the answer, the ledger and the failures", () => {
     expect(String(denied)).toContain("denied by the rules")
     expect(callsOf(h.bigquery, "run")).toEqual([])
     expect((await runTool(h, "write", { planId })).output).toMatchObject({ error: "PLAN_EXPIRED" })
+  })
+})
+
+describe("the approval prompt shows what will change (review bigquery-8 M-1)", () => {
+  it("shows a statement longer than Day 0's 2,000-character cut in full", async () => {
+    const long = `INSERT INTO \`invented-proj.sales.orders\` (id) SELECT id FROM \`invented-proj.sales.other\` -- ${"x".repeat(2_400)}`
+    const { h, planId } = await planned({ sql: long })
+    const { asserted } = await runTool(h, "write", { planId })
+    const commitAssert = asserted.find((request) => request.metadata?.planId === planId)!
+    expect(commitAssert.metadata!.sql).toBe(long)
+    expect(commitAssert.metadata!.sqlCharacters).toBe(long.length)
+    expect(commitAssert.metadata).not.toHaveProperty("sqlMore")
+    expect(commitAssert.metadata!.committable).toBe(true)
+  })
+
+  it("cuts past 20,000 characters, says exactly how many are not shown, and saves the full text", async () => {
+    const state = mkdtempSync(join(tmpdir(), "bq-approval-"))
+    const before = process.env.XDG_STATE_HOME
+    process.env.XDG_STATE_HOME = state
+    try {
+      const long = `INSERT INTO \`invented-proj.sales.orders\` (id) SELECT id FROM \`invented-proj.sales.other\` -- ${"y".repeat(25_000)}`
+      const { h, planId } = await planned({ sql: long })
+      const { asserted } = await runTool(h, "write", { planId })
+      const metadata = asserted.find((request) => request.metadata?.planId === planId)!.metadata!
+      expect(metadata.sqlMore).toBe(long.length - 20_000)
+      expect(String(metadata.sql)).toContain(`+${long.length - 20_000} characters not shown`)
+      const file = String(metadata.sqlFile)
+      expect(existsSync(file)).toBe(true)
+      expect(readFileSync(file, "utf8")).toBe(long)
+    } finally {
+      if (before === undefined) delete process.env.XDG_STATE_HOME
+      else process.env.XDG_STATE_HOME = before
+      rmSync(state, { recursive: true, force: true })
+    }
+  })
+
+  it("lists a script's statements, types and targets in the prompt", async () => {
+    const script = "CREATE TABLE `invented-proj.sales.fresh` (id INT64); INSERT INTO `invented-proj.sales.orders` (id) VALUES (1)"
+    const h = harness(signedIn())
+    scriptChange(h.bigquery, { dryRuns: [{ statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }], status: jobStatus({ statementType: "SCRIPT", numDmlAffectedRows: undefined }) })
+    scriptDryRunsBySql(h.bigquery, (sql) =>
+      sql.includes(";")
+        ? { statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }
+        : sql.includes("CREATE TABLE")
+          ? { statistics: statistics({ statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("fresh") }) }
+          : { statistics: statistics({ statementType: "INSERT", referencedTables: [tableRef()], totalBytesProcessed: "1024" }) },
+    )
+    const created = await runTool(h, "plan", { sql: script, maxBytes: "1GiB" })
+    const { asserted } = await runTool(h, "delete", { planId: String(created.output.planId) })
+    const metadata = asserted.find((request) => request.metadata?.planId === created.output.planId)!.metadata!
+    const summary = metadata.script as { count: number; statements: { type: string; targets: string[]; firstLine: string }[] }
+    expect(summary.count).toBe(2)
+    expect(summary.statements.map((statement) => statement.type)).toEqual(["CREATE_TABLE", "INSERT"])
+    expect(summary.statements.map((statement) => statement.targets)).toEqual([["invented-proj.sales.fresh"], ["invented-proj.sales.orders"]])
+    expect(summary.statements[0]!.firstLine).toContain("CREATE TABLE")
+  })
+
+  it("refuses a script whose statements changed between the plan and the commit", async () => {
+    const script = "CREATE TABLE `invented-proj.sales.fresh` (id INT64); INSERT INTO `invented-proj.sales.orders` (id) VALUES (1)"
+    const h = harness(signedIn())
+    scriptChange(h.bigquery, { dryRuns: [{ statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }], status: jobStatus({ statementType: "SCRIPT", numDmlAffectedRows: undefined }) })
+    let insertStatement = 0
+    scriptDryRunsBySql(h.bigquery, (sql) => {
+      if (sql.includes(";")) return { statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }
+      if (sql.includes("CREATE TABLE")) return { statistics: statistics({ statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("fresh") }) }
+      insertStatement += 1
+      return { statistics: statistics({ statementType: insertStatement === 1 ? "INSERT" : "UPDATE", referencedTables: [tableRef()], totalBytesProcessed: "1024" }) }
+    })
+    const created = await runTool(h, "plan", { sql: script, maxBytes: "1GiB" })
+    const { output } = await runTool(h, "delete", { planId: String(created.output.planId) })
+    expect(output).toMatchObject({ state: "refused", error: "PLAN_CHANGED" })
+    expect(callsOf(h.bigquery, "run")).toEqual([])
+  })
+})
+
+describe("a commit asserts the change's targets as resources", () => {
+  it("refuses a DROP target a person's rule denies, before the run", async () => {
+    const h = harness(signedIn())
+    const stats = statistics({ statementType: "DROP_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef() })
+    scriptChange(h.bigquery, { dryRuns: [{ statistics: stats }, { statistics: stats }], status: jobStatus({ statementType: "DROP_TABLE", numDmlAffectedRows: undefined }) })
+    const created = await runTool(h, "plan", { sql: "DROP TABLE `invented-proj.sales.orders`" })
+    const denied = await runTool(h, "delete", { planId: String(created.output.planId) }, {
+      deny: (request) => request.resources.includes("default:table:invented-proj.sales.orders"),
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(String(denied)).toContain("denied by the rules")
+    expect(callsOf(h.bigquery, "run")).toEqual([])
+    expect((await runTool(h, "delete", { planId: String(created.output.planId) })).output).toMatchObject({ error: "PLAN_EXPIRED" })
   })
 })
 

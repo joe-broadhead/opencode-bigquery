@@ -15,6 +15,7 @@ import {
   readOnly,
   runTool,
   scriptChange,
+  scriptDryRunsBySql,
   signedIn,
   statistics,
   tableRef,
@@ -148,13 +149,16 @@ describe("bigquery_plan: the targets are the dry run's, never the SQL text's", (
     const { output } = await runTool(h, "plan", { sql: "CREATE TABLE `invented-proj.sales.from_text` (id INT64)" })
     const targets = (output.preview as { targets: string[] }).targets
     expect(targets).toEqual(["invented-proj.sales.actual_target"])
-    expect(h.ports.plans.list()[0]!.statement.targets).toEqual(targets)
+    const stored = h.ports.plans.list()[0]!.statement.targets as unknown as { kind: string; project: string; dataset: string; name: string; label: string }[]
+    expect(stored).toEqual([{ kind: "table", project: PROJECT, dataset: "sales", name: "actual_target", label: "invented-proj.sales.actual_target", source: "ddl" }])
   })
 
-  it("names a DML's affected tables from the dry run's referencedTables", async () => {
+  it("names a DML's destination from its own statement, and its reads as referenced", async () => {
     const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "INSERT", referencedTables: [tableRef(), tableRef("other")] }) }] })
     const { output } = await runTool(h, "plan", { sql: INSERT_SQL })
-    expect((output.preview as { targets: string[] }).targets.sort()).toEqual(["invented-proj.sales.orders", "invented-proj.sales.other"])
+    const preview = output.preview as { targets: string[]; referenced: { name: string }[] }
+    expect(preview.targets).toEqual(["invented-proj.sales.orders"])
+    expect(preview.referenced.map((record) => record.name)).toEqual(expect.arrayContaining(["invented-proj.sales.orders", "invented-proj.sales.other"]))
   })
 
   it("names a dataset, a routine and a row access policy target", async () => {
@@ -185,6 +189,93 @@ describe("bigquery_plan: the targets are the dry run's, never the SQL text's", (
     const { output } = await runTool(h, "plan", { sql: "CREATE TABLE `invented-proj.hr.people` (id INT64)" })
     expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
     expect(h.ports.plans.list()).toEqual([])
+  })
+})
+
+describe("bigquery_plan: a change's target is checked, not assumed (review bigquery-8 H-1)", () => {
+  const FENCED = { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { allow: ["invented-proj.sales"] } } } }
+
+  it("refuses the reviewer's escapes under an allow fence: INSERT, ALTER, TRUNCATE, DROP, LOAD, CALL, CREATE MODEL and a project grant", async () => {
+    const cases: [string, string, Record<string, unknown>][] = [
+      ["INSERT", "INSERT INTO `invented-proj.hr.people` (id) SELECT id FROM `invented-proj.sales.orders`", { statementType: "INSERT", referencedTables: [tableRef()], totalBytesProcessed: "1024" }],
+      ["ALTER_TABLE", "ALTER TABLE `invented-proj.hr.people` SET OPTIONS (description = 'x')", { statementType: "ALTER_TABLE", referencedTables: [], totalBytesProcessed: "0" }],
+      ["TRUNCATE_TABLE", "TRUNCATE TABLE `invented-proj.hr.people`", { statementType: "TRUNCATE_TABLE", referencedTables: [], totalBytesProcessed: "0" }],
+      ["DROP_TABLE", "DROP TABLE `invented-proj.hr.people`", { statementType: "DROP_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("people", "hr") }],
+      ["LOAD_DATA", "LOAD DATA INTO `invented-proj.hr.people` FROM FILES (format = 'CSV', uris = ['gs://invented/x.csv'])", { statementType: "LOAD_DATA", referencedTables: [], totalBytesProcessed: "0" }],
+      ["CALL", "CALL `invented-proj.hr.proc`()", { statementType: "CALL", referencedTables: [], totalBytesProcessed: "0" }],
+      ["CREATE_MODEL", "CREATE MODEL `invented-proj.hr.m` OPTIONS (model_type = 'linear_reg') AS SELECT 1", { statementType: "CREATE_MODEL", referencedTables: [], totalBytesProcessed: "0" }],
+      ["GRANT_ON_PROJECT", "GRANT `roles/bigquery.dataViewer` ON PROJECT `invented-proj` TO 'group:invented@example.invalid'", { statementType: "GRANT_ON_PROJECT", referencedTables: [], totalBytesProcessed: "0" }],
+    ]
+    for (const [statementType, sql, fields] of cases) {
+      const h = planHarness({ dryRuns: [{ statistics: statistics(fields as never) }] }, readOnly(), FENCED)
+      const { output } = await runTool(h, "plan", { sql })
+      expect(output, statementType).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+      expect(h.ports.plans.list(), statementType).toEqual([])
+    }
+  })
+
+  it("refuses a DDL target outside the fence even when nothing it reads is fenced", async () => {
+    const h = planHarness(
+      { dryRuns: [{ statistics: statistics({ statementType: "DROP_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("people", "hr") }) }] },
+      readOnly(),
+      FENCED,
+    )
+    const { output } = await runTool(h, "plan", { sql: "DROP TABLE `invented-proj.hr.people`" })
+    expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+  })
+
+  it("refuses a script when any statement's target is outside the fence or cannot be verified", async () => {
+    const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }] }, readOnly(), FENCED)
+    scriptDryRunsBySql(h.bigquery, (sql) =>
+      sql.includes(";")
+        ? { statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }
+        : sql.includes("INSERT")
+          ? { statistics: statistics({ statementType: "INSERT", referencedTables: [tableRef()], totalBytesProcessed: "1024" }) }
+          : { statistics: statistics({ statementType: "SELECT", referencedTables: [tableRef()], totalBytesProcessed: "1024" }) },
+    )
+    const { output } = await runTool(h, "plan", {
+      sql: "INSERT INTO `invented-proj.hr.people` (id) SELECT id FROM `invented-proj.sales.orders`; SELECT id FROM `invented-proj.sales.orders`",
+      maxBytes: "1GiB",
+    })
+    expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+  })
+
+  it("asserts a DDL target as a table resource, so a person's deny rule refuses the plan", async () => {
+    const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "DROP_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef() }) }] })
+    const denied = await runTool(h, "plan", { sql: "DROP TABLE `invented-proj.sales.orders`" }, {
+      deny: (request) => request.resources.includes("default:table:invented-proj.sales.orders"),
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(String(denied)).toContain("denied by the rules")
+    expect(h.ports.plans.list()).toEqual([])
+  })
+
+  it("lists a script's statements, their types and their targets in the preview", async () => {
+    const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }] })
+    scriptDryRunsBySql(h.bigquery, (sql) =>
+      sql.includes(";")
+        ? { statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }
+        : sql.includes("CREATE TABLE")
+          ? { statistics: statistics({ statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("fresh") }) }
+          : { statistics: statistics({ statementType: "INSERT", referencedTables: [tableRef()], totalBytesProcessed: "1024" }) },
+    )
+    const { output } = await runTool(h, "plan", {
+      sql: "CREATE TABLE `invented-proj.sales.fresh` (id INT64); INSERT INTO `invented-proj.sales.orders` (id) VALUES (1)",
+      maxBytes: "1GiB",
+    })
+    expect(output).toMatchObject({ state: "done", category: "delete" })
+    const preview = output.preview as { targets: string[]; reason: string }
+    expect(preview.targets).toEqual(expect.arrayContaining(["invented-proj.sales.fresh", "invented-proj.sales.orders"]))
+    expect(preview.reason).toContain("A script of 2 statements")
+    expect(preview.reason).toContain("CREATE TABLE")
+    const stored = h.ports.plans.list()[0] as unknown as { script?: { statements: { type: string; targets: { label: string }[] }[] } }
+    expect(stored.script?.statements.map((statement) => statement.type)).toEqual(["CREATE_TABLE", "INSERT"])
+    expect(stored.script?.statements.map((statement) => statement.targets.map((target) => target.label))).toEqual([
+      ["invented-proj.sales.fresh"],
+      ["invented-proj.sales.orders"],
+    ])
   })
 })
 
@@ -259,7 +350,6 @@ describe("bigquery_plan: the preview's numbers and the cap", () => {
     const preview = output.preview as Record<string, unknown>
     expect(preview).toMatchObject({ bytes: 2 ** 30, accuracy: "PRECISE", capBytes: 10 * 2 ** 30 })
     expect(String(preview.bound)).toContain("The cap bounds this statement.")
-    expect(String(preview.bound)).toContain("names the tables a DML statement references, not which one it writes")
     expect(preview.usd).toBeCloseTo((2 ** 30 / 2 ** 40) * 6.25, 8)
     expect(preview.referenced).toEqual([
       expect.objectContaining({ kind: "table", name: "invented-proj.sales.orders", storage: "native", tagged: [] }),

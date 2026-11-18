@@ -53,8 +53,13 @@ export function changeStatistics(statistics: DryRunStatistics): ChangeStatistics
 /** What kind of object a change's target is: the dry run's own words, not a parse of the SQL. */
 export type TargetKind = "table" | "view" | "dataset" | "routine" | "row access policy"
 
-/** One object the dry run names as the statement's target. */
-export interface Target {
+/**
+ * A plan's structured target: the exact shape of the contract amendment `PlanTarget` (contract/d-amendments), mirrored
+ * here until that branch is on master, when this interface is replaced by the import and the casts in plan/commit go.
+ * The review of #8 makes it blocking: a change's target is fenced and asserted against the person's rules, never just a
+ * string in a preview.
+ */
+export interface PlanTarget {
   readonly kind: TargetKind
   readonly project: string
   readonly dataset: string
@@ -64,8 +69,18 @@ export interface Target {
   readonly policyId?: string
   /** The target as the preview shows it, each part validated (design §5.6). */
   readonly label: string
-  /** Which dry-run field named it: a DDL/DCL target, or a DML's referenced tables. */
-  readonly source: "ddl" | "dcl" | "referenced"
+}
+
+/** One object the dry run names as the statement's target, and which field named it. */
+export interface Target extends PlanTarget {
+  /**
+   * `ddl`/`dcl`: the dry run's own target field, exact. `statement`: the destination the statement's own leading
+   * keywords name (`INSERT INTO`, `UPDATE`, `MERGE INTO`, `TRUNCATE TABLE`, `ALTER TABLE`, …), read by the lexer as a
+   * stricter-only addition (review bigquery-8 H-1) and never used to allow anything. `referenced`: a DML's
+   * `referencedTables`, which Google does not say is the table written (TODO(L7, L13)), so a fence refuses a DML whose
+   * only targets are referenced.
+   */
+  readonly source: "ddl" | "dcl" | "statement" | "referenced"
 }
 
 /** A target part shown in a preview: a Google identifier, or `object` when it is not one. */
@@ -75,6 +90,106 @@ const label = (parts: readonly string[]) => parts.map(part).join(".")
 
 /** The statement types whose target is the table a DML statement writes; Google names it in `referencedTables`. */
 const DML_TARGETS = new Set(["INSERT", "UPDATE", "DELETE", "MERGE", "TRUNCATE_TABLE", "LOAD_DATA"])
+
+/**
+ * The statement types with no dataset-scoped target: a read writes nothing, an export writes a GCS object, an admin
+ * statement acts on capacity/reservations/connections, and a transaction alone changes nothing. The dataset fence and a
+ * person's table rule have nothing to check for these; reads are fenced on their referenced tables by package C.
+ */
+const NO_TARGET_TYPES = new Set([
+  "SELECT",
+  "ASSERT",
+  "EXPORT_DATA",
+  "EXPORT_MODEL",
+  "EXPORT_METADATA",
+  "CREATE_CAPACITY",
+  "CREATE_RESERVATION",
+  "CREATE_ASSIGNMENT",
+  "CREATE_CONNECTION",
+  "DROP_CAPACITY",
+  "DROP_RESERVATION",
+  "DROP_ASSIGNMENT",
+  "DROP_CONNECTION",
+  "ALTER_CAPACITY",
+  "ALTER_RESERVATION",
+  "ALTER_CONNECTION",
+  "ALTER_PROJECT",
+  "ALTER_ORGANIZATION",
+  "ALTER_BI_CAPACITY",
+  "BEGIN_TRANSACTION",
+  "COMMIT_TRANSACTION",
+  "ROLLBACK_TRANSACTION",
+])
+
+/** Whether a statement's change is dataset-scoped, so a fence needs the target named before it can be checked. */
+export function needsTarget(statementType: string): boolean {
+  return !NO_TARGET_TYPES.has(statementType)
+}
+
+/**
+ * Whether the dry run named a target the fence and a person's rules can rely on. A DML's only candidate is
+ * `referencedTables`, which the live check has not confirmed contains the table written; until L7/L13 does, a fence
+ * treats a DML as unverified rather than assume it. Absent a fence, the DML's referenced tables are still shown and
+ * asserted (best effort), never used to prove the target is inside.
+ */
+export function targetsVerified(statementType: string, targets: readonly Target[]): boolean {
+  if (!needsTarget(statementType)) return true
+  if (targets.length === 0) return false
+  if (DML_TARGETS.has(statementType) && targets.every((target) => target.source === "referenced")) return false
+  return true
+}
+
+/** A target part that can be named in a resource or a fence pattern without spoofing it. */
+const SAFE_RESOURCE = /^[A-Za-z0-9_.:-]{1,1024}$/
+
+/** Whether every part of a target can be named in a person's rule (`<account>:table:<project>.<dataset>.<name>`). */
+export function targetSafe(target: PlanTarget): boolean {
+  return SAFE_RESOURCE.test(target.project) && SAFE_RESOURCE.test(target.dataset) && SAFE_RESOURCE.test(target.name)
+}
+
+/** Whether two target lists name the same objects (kind, project, dataset, name and policy id), in any order. */
+export function sameTargets(left: readonly PlanTarget[], right: readonly PlanTarget[]): boolean {
+  const key = (target: PlanTarget) => [target.kind, target.project, target.dataset, target.name, target.policyId ?? ""].join("|")
+  const a = left.map(key).sort()
+  const b = right.map(key).sort()
+  return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+/**
+ * A statement's change targets, in order of what can be trusted: the dry run's own DDL/DCL fields when it named them;
+ * otherwise the destination the statement's leading keywords name; otherwise a DML's referenced tables as a best effort
+ * (which a fence treats as unverified). The lexer's destination is never used to override a server-named target, and the
+ * server's exact target always stays.
+ */
+export function changeTargets(server: readonly Target[], destination: Target | undefined): Target[] {
+  const named = server.filter((target) => target.source === "ddl" || target.source === "dcl")
+  if (named.length > 0) return [...named]
+  if (destination !== undefined) return [destination]
+  return [...server]
+}
+
+/** The objects a statement's dry run says it reads, as fence/assert objects; a property graph is left to package C. */
+export function referencesOf(statistics: ChangeStatistics): Target[] {
+  const out: Target[] = []
+  const add = (kind: "table" | "view" | "routine", project: string, dataset: string, name: string) =>
+    out.push({ kind, project, dataset, name, label: label([project, dataset, name]), source: "referenced" })
+  for (const ref of statistics.referencedTables ?? []) add("table", ref.projectId, ref.datasetId, ref.tableId)
+  for (const ref of statistics.referencedLogicalViews ?? []) add("view", ref.projectId, ref.datasetId, ref.tableId)
+  for (const ref of statistics.referencedRoutines ?? []) add("routine", ref.projectId, ref.datasetId, ref.routineId)
+  return out
+}
+
+/** The deduplicated union of target lists, in first-seen order. */
+export function unionTargets(...lists: readonly (readonly Target[])[]): Target[] {
+  const found = new Map<string, Target>()
+  for (const list of lists) {
+    for (const target of list) {
+      const key = [target.kind, target.project, target.dataset, target.name, target.policyId ?? ""].join("|")
+      if (!found.has(key)) found.set(key, target)
+    }
+  }
+  return [...found.values()]
+}
 
 /** A view's DDL target is a view, not a table (the Job page's `ddlTargetTable` covers both). */
 const VIEW_TYPES = new Set(["CREATE_VIEW", "DROP_VIEW", "ALTER_VIEW"])
