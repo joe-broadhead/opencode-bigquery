@@ -41,8 +41,17 @@ function nearestExisting(path: string): string {
 
 const refused = (detail: string, next = "Save to a path inside the project, or one under allowedRoots.") => new BigQueryError("SAVE_PATH_REFUSED", detail, next)
 
+/** The project OpenCode runs in. A folder removed under a running host is a refusal, not an unhandled error. */
+function workingDirectory(): string {
+  try {
+    return process.cwd()
+  } catch {
+    throw refused("The project folder is not available, so a save path cannot be resolved.", "Restart OpenCode in the project, or pass an absolute path under allowedRoots.")
+  }
+}
+
 /** The target's absolute path, after every check that can be made before anything is written. */
-export function resolveTarget(input: { readonly path: string; readonly overwrite?: boolean }, options: Options, cwd = process.cwd()): SaveTarget {
+export function resolveTarget(input: { readonly path: string; readonly overwrite?: boolean }, options: Options, cwd = workingDirectory()): SaveTarget {
   const results = resolve(cwd, options.resultsDir)
   const roots = [cwd, results, ...options.allowedRoots.map((root) => resolve(cwd, root))]
   const target = resolve(cwd, input.path)

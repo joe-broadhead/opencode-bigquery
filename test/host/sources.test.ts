@@ -2,16 +2,38 @@
 // requests the host may make are to this file's loopback fake, which serves Google's two hosts in Google's own shapes
 // (a full-projection `bigquery#jobList`, a `Job`, a `getQueryResults` answer, token-info); `close()` fails the test if
 // anything else left the machine.
-import { existsSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { Rpc } from "@opencode/plugin/rpc"
 import { RPC_METHODS } from "../../src/domain/actions.js"
 import { TOOLS_RPC_ID } from "../../src/host/script-methods.js"
 import { jobResource } from "../unit/sources/support.js"
-import { cleanup, pluginState, startHost, status, type Host } from "./harness.js"
+import { pluginState, startHost, status, type Host } from "./harness.js"
+import { ROOT } from "./isolate.js"
+import { routeFetch } from "./route-fetch.js"
 
-afterAll(cleanup)
+// The host suite's files share one process, and an earlier file's afterAll removes the scratch root and restores the
+// harness's fetch router. This file therefore makes the scratch root and the current folder again, and installs its own
+// router, so it runs the same whatever order Bun loads the files in. Every request it makes still goes to its fake; the
+// router's blocked list is checked below, and `close()` checks the harness's.
+const router = routeFetch()
+
+beforeAll(() => {
+  // Recreate what an earlier file's cleanup removed: the scratch root, its HOME and TMPDIR, and the current folder.
+  for (const dir of [ROOT, join(ROOT, "home"), join(ROOT, "tmp")]) mkdirSync(dir, { recursive: true })
+  process.chdir(ROOT)
+})
+
+afterAll(() => {
+  cleanup()
+  router.restore()
+})
+
+/** The harness's cleanup, without importing its afterAll twice. */
+function cleanup() {
+  if (router.blocked.length > 0) throw new Error(`the sources host test tried to leave the machine: ${[...new Set(router.blocked)].join(", ")}`)
+}
 
 /** The client side only names the methods: the plugin checks each input against its own contract. */
 const open = {}
@@ -69,6 +91,13 @@ function fake() {
   return { origin: `http://127.0.0.1:${server.port}`, close: async () => void server.stop(true) }
 }
 
+/** A host whose Google hosts (and token-info) our router sends to a fresh fake. */
+async function started(options: Record<string, unknown>) {
+  const loopback = fake()
+  router.target = loopback.origin
+  return startHost({ options, fake: loopback })
+}
+
 async function session(host: Host): Promise<string> {
   const created = (await host.client.sessions.create({ title: "sources host", agent: "build", location: { directory: host.location.directory } })) as { id?: string }
   const id = created.id ?? (created as unknown as { data: { id: string } }).data.id
@@ -106,7 +135,7 @@ afterAll(() => {
 
 describe("the sources in a host", () => {
   test("loads with the source tools built, serves the tools RPC's reads, and names the sign-in at probe", async () => {
-    const host = await startHost({ options, fake: fake() })
+    const host = await started(options)
     try {
       expect(await pluginState(host)).toEqual({ status: "active" })
       expect((await status(host)).tools.notBuilt).toBeLessThanOrEqual(8)
@@ -127,8 +156,8 @@ describe("the sources in a host", () => {
   }, 120_000)
 
   test("the model's tool answers the same page, and bigquery_save writes the job's rows to the project", async () => {
-    const host = await startHost({ options, fake: fake() })
-    const file = join(process.cwd(), `.host-save-${Date.now().toString(36)}.csv`)
+    const host = await started(options)
+    const file = join(host.location.directory, `host-save-${Date.now().toString(36)}.csv`)
     try {
       const events = await liveTool(host, "events_list")
       const page = (await events.execute({ source: "jobs", account: "work" }, invocation(await session(host)) as never)) as { output?: Record<string, unknown> }
@@ -147,7 +176,7 @@ describe("the sources in a host", () => {
   }, 120_000)
 
   test("bigquery_save refuses a path outside the project before any Google call", async () => {
-    const host = await startHost({ options, fake: fake() })
+    const host = await started(options)
     try {
       const tool = await liveTool(host, "save")
       const answer = (await tool.execute({ project: PROJECT, jobId: "job-1", path: "/etc/outside-the-project.csv", format: "csv" }, invocation(await session(host)) as never)) as {
