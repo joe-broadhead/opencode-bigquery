@@ -50,6 +50,14 @@ BigQuery's own estimate for it is zero or too low. Such a query runs only from a
 it is denied at `read-only`. In Jelly, under Allowed it runs without asking, bounded only by that time limit and your
 budget if you set one; under Ask before changes or Read only, Jelly asks you first. A script can never run one.
 
+## Cost
+
+Google bills each query to the account's billing project. On on-demand pricing that is about $6.25 per TiB scanned,
+with the first TiB each month free; cached reads are free. Every query is estimated first and runs with a byte cap,
+10 GiB unless you raise it (`maxBytesBilled`, up to `maxBytesCeiling`). A read of the `bigquery.saved` source is billed
+at most 1 GiB unless you raise its `maxBytes`. AI/ML functions, Python UDFs and remote functions bill outside the cap
+and run only from a plan.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md).

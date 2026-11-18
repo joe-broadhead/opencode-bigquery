@@ -65,8 +65,14 @@ disclosure of what a Read token can do.
 ## Cost
 
 `jelly.cost`, shown on the review before the plugin installs: Google bills queries to your billing project, on demand
-about $6.25 per TiB scanned with the first TiB a month free; each query is estimated and capped; AI/ML functions,
-Python UDFs and remote functions bill outside that cap and need a plan. `jelly.admin` names what an admin grants first:
+about $6.25 per TiB scanned with the first TiB a month free, and cached reads are free; each query is estimated and
+capped (10 GiB unless raised, and a saved query at most 1 GiB billed per read unless you raise it); AI/ML functions,
+Python UDFs and remote functions bill outside that cap and need a plan.
+
+The `bigquery.saved` source declares its price as $6.25 per TiB billed. Its conditions (on-demand pricing; at most
+1 GiB billed per read unless you raise it; cached reads are free) are stated here and in the cost line rather than in
+the `sources` block, because the source contract's v0.1.x consumers refuse a price's `conditions` and `min`; they
+return to the block once Jelly and Memory read source-contract v0.2.0. `jelly.admin` names what an admin grants first:
 BigQuery Job User on a billing project, Data Viewer on the datasets read, and this OAuth client where an organisation
 restricts Google sign-ins.
 

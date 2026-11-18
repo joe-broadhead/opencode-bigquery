@@ -38,7 +38,7 @@ The options are the contract's (design §12); the tools that read most of them a
 | `scripts` | boolean | `true` | Whether a multi-statement script may be planned. |
 | `uncappedReads` | `"ask"` or `"refuse"` | `"ask"` | Whether a read the byte cap cannot bound may run from a plan. With `"ask"` the plugin asserts `bigquery.uncapped_read`: the default rules below ask at `all` and `ask-changes` and deny at `read-only`; in Jelly, Allowed runs it without asking. `"refuse"` never runs one. |
 | `policyTagged` | `"withhold"` or `"allow"` | `"withhold"` | Whether values of policy-tagged columns may reach the model. |
-| `savedQueries` | object: name → `{ sql, project?, location?, maxBytes?, allowUncached? }` | `{}` | The queries the `bigquery.saved` source may run. |
+| `savedQueries` | object: name → `{ sql, project?, location?, maxBytes?, allowUncached? }` | `{}` | The queries the `bigquery.saved` source may run. On-demand pricing, about $6.25 per TiB billed; at most 1 GiB billed per read unless you raise it (`maxBytes`); cached reads are free. |
 | `planTtlSeconds` | integer | `300` | How long a plan can be committed. |
 | `admin` | `{ enabled, requireReason }` | both `true` | Admin plans. |
 | `allowUntestedHost` | boolean | `false` | Load on an OpenCode release outside `>=2.2.3 <2.4.0`, with a warning in status. |

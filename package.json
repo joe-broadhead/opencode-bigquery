@@ -108,7 +108,7 @@
     "title": "BigQuery",
     "summary": "Find, estimate and query your BigQuery data, with a cost cap on every query.",
     "icon": "assets/icon.svg",
-    "cost": "Google bills queries to your billing project: on demand about $6.25 per TiB scanned, first TiB a month free. Each query is estimated and capped (10 GiB unless raised); AI/ML functions, Python UDFs and remote functions bill outside that cap and need a plan. Results say what was billed.",
+    "cost": "Google bills queries to your billing project: on demand about $6.25 per TiB scanned, first TiB a month free; cached reads are free. Each query is capped (10 GiB unless raised, a saved query 1 GiB a read); AI/ML functions, Python UDFs and remote functions bill outside that cap and need a plan.",
     "admin": "grant you BigQuery Job User on a billing project and Data Viewer on the datasets you read, and allow this OAuth client if your organisation restricts Google sign-ins",
     "tools": [
       {
@@ -351,8 +351,7 @@
           "events": "bigquery.events_list",
           "operations": [
             "bigquery.jobs.list"
-          ],
-          "identity": []
+          ]
         },
         "private": true,
         "cost": {
@@ -399,8 +398,7 @@
             "bigquery.rowAccessPolicies.list",
             "bigquery.tabledata.list",
             "bigquery.tables.get"
-          ],
-          "identity": []
+          ]
         },
         "private": true,
         "cost": {
@@ -408,9 +406,7 @@
           "units": [
             {
               "per": "tib",
-              "usd": 6.25,
-              "min": 0,
-              "conditions": "On-demand pricing; at most 1 GiB billed per read unless you raise it; cached reads are free"
+              "usd": 6.25
             }
           ],
           "probe": {

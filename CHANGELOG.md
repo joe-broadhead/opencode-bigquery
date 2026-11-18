@@ -24,3 +24,11 @@ All notable changes to this project are documented here. The format follows [Kee
   and the `sources` block (`bigquery.jobs`, `bigquery.saved`), checked by the source contract v0.2.0.
 - `google-auth-library` 11.3.4, bundled for the opt-in ADC mode.
 - `docs/ownership.md`: which package owns each file.
+
+### Changed
+
+- The `sources` block leaves out the keys source-contract v0.1.x consumers (Jelly and Memory today) refuse: the
+  `bigquery.saved` price's `conditions` and `min`, and the empty `permission.identity` of both sources. The price stays
+  $6.25 per TiB billed; its conditions (on-demand pricing; at most 1 GiB billed per read unless you raise it; cached
+  reads are free) are in the README's Cost section, `docs/jelly.md` and the jelly cost line. They return once those
+  consumers re-vendor v0.2.0.

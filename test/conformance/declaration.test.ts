@@ -50,3 +50,63 @@ test("names only read operations, as the resolvers do", () => {
     expect(operationProblem(operation), `${spec.name}: ${operation}`).toBeUndefined()
   }
 })
+
+/**
+ * Keys source-contract v0.1.x consumers (Jelly and Memory today) refuse outright. The family holds them until those
+ * consumers re-vendor v0.2.0 (jelly #5910); this test keeps one from coming back by accident. Delete an entry here only
+ * when that lands, and say so in the CHANGELOG.
+ */
+const HELD_ANYWHERE = ["removals", "identityRules", "readsIdentity", "verified", "conditions", "min"] as const
+
+function heldKeys(value: unknown, path: string): string[] {
+  if (Array.isArray(value)) return value.flatMap((item, index) => heldKeys(item, `${path}[${index}]`))
+  if (typeof value !== "object" || value === null) return []
+  return Object.entries(value).flatMap(([key, child]) => {
+    const here = `${path}.${key}`
+    const found: string[] = []
+    if ((HELD_ANYWHERE as readonly string[]).includes(key)) found.push(here)
+    if (key === "accounts" && typeof child === "object" && child !== null && "server" in child) found.push(`${here}.server`)
+    if (key === "permission" && typeof child === "object" && child !== null && Array.isArray((child as { identity?: unknown }).identity) && (child as { identity: unknown[] }).identity.length === 0) {
+      found.push(`${here}.identity (empty)`)
+    }
+    return [...found, ...heldKeys(child, here)]
+  })
+}
+
+test("declares none of the keys v0.1.x consumers refuse, until they read v0.2.0", () => {
+  expect(heldKeys(sources, "sources")).toEqual([])
+})
+
+test("the held-key check finds each held key", () => {
+  const planted = {
+    items: [
+      { accounts: { server: "x" }, permission: { identity: [] }, identityRules: [], readsIdentity: true, cost: { units: [{ per: "tib", usd: 1, min: 0, conditions: "x" }] } },
+      { removals: [], owner: { verified: false } },
+    ],
+  }
+  expect(heldKeys(planted, "s").sort()).toEqual(
+    [
+      "s.items[0].accounts.server",
+      "s.items[0].permission.identity (empty)",
+      "s.items[0].identityRules",
+      "s.items[0].readsIdentity",
+      "s.items[0].cost.units[0].min",
+      "s.items[0].cost.units[0].conditions",
+      "s.items[1].removals",
+      "s.items[1].owner.verified",
+    ].sort(),
+  )
+})
+
+test("keeps every billed price honest on its own: a unit and a dollar amount above zero", () => {
+  for (const item of sources.items as unknown as { id: string; cost: { class: string; units?: { per?: string; usd?: number }[] } }[]) {
+    if (item.cost.class !== "billed") continue
+    expect(item.cost.units?.length, item.id).toBeGreaterThan(0)
+    for (const unit of item.cost.units ?? []) {
+      expect(typeof unit.per, item.id).toBe("string")
+      expect(unit.usd, item.id).toBeGreaterThan(0)
+    }
+  }
+  const saved = (sources.items as unknown as { id: string; cost: unknown }[]).find((item) => item.id === "bigquery.saved")!
+  expect(saved.cost).toEqual({ class: "billed", units: [{ per: "tib", usd: 6.25 }], probe: { per: "call", usd: 0 } })
+})

@@ -63,6 +63,10 @@ describe("the jelly declaration", () => {
     expect(lineProblems("admin", jelly.admin, 200)).toEqual([])
     expect(jelly.cost).toMatch(/\$6\.25 per TiB/)
     expect(jelly.cost).toMatch(/AI\/ML functions, Python UDFs and remote functions bill outside that cap/)
+    // The saved source's price conditions, held out of the sources block (test/conformance/declaration.test.ts).
+    expect(jelly.cost).toMatch(/on demand/)
+    expect(jelly.cost).toMatch(/cached reads are free/)
+    expect(jelly.cost).toMatch(/a saved query 1 GiB a read/)
   })
 
   it("declares no views or RPC methods, and access as its one setting", () => {
