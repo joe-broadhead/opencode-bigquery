@@ -35,6 +35,12 @@ All notable changes to this project are documented here. The format follows [Kee
 - The reads and guards (package C): the GoogleSQL lexer, expansion of views and routines (bounded), the side-effect,
   dataset-fence, cap-enforceability, cost and policy-tag guards, the spend ledger and budgets, hints, and the eight read
   tools with a sample, partitions, search, estimate, query, job, jobs and profile.
+- `bigquery_save` (package E): a finished query's results to a CSV, JSONL or Parquet file, with sha256, the save limits
+  and the charts metadata.
+- The `bigquery.jobs` source: your finished jobs, each delivered once, read on Google's clock, with jobs still running
+  tracked until they finish.
+- The `bigquery.saved` source: saved queries through the read path as a table, with `saved_list` and `probe`, and the
+  source contract's conformance run with a complete `reports/conformance-report.json`.
 - `bigquery_status` (package F): each account's level from the two §3.1 checks (with the reason when one fails), a
   Read account's disclosure, the byte caps, today's and this session's bytes and dollars from the ledger, the free
   checks `include` adds (`jobs`, `iam`, `spend`), and the warnings a person needs. The status RPC, `/bigquery-status`

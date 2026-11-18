@@ -28,7 +28,7 @@ The options are the contract's (design §12). Every one is optional; the default
 | `allowAdcInHost` | boolean | `false` | Hosted Jelly only: allow Application Default Credentials. |
 | `maxBytesBilled` | bytes or a size such as `"10GiB"` | `"10GiB"` | The byte cap every job carries unless a call passes a lower or higher one. |
 | `maxBytesCeiling` | bytes or a size | `"100GiB"` | The highest cap a call may ask for. |
-| `budget` | `{ daily?, session?, action }` | none | An opt-in budget in bytes billed; `action` is `refuse` (default) or `warn`, which runs the call and warns when 10 % or less of the budget is left. |
+| `budget` | `{ daily?, session?, action }` | none | An opt-in budget in bytes billed; `action` is `refuse` (default) or `warn`. Either action adds `BUDGET_WARN` when 10 % or less of the budget is left; `warn` also lets a call run once the budget is spent, where `refuse` blocks it. |
 | `onDemandUsdPerTiB`, `slotHourUsd` | number | `6.25`, none | Prices for the estimates. |
 | `maxRows`, `maxInlineBytes` | integer, bytes | `50`, `"32KiB"` | What a result carries inline. |
 | `maxSaveRows`, `maxSaveBytes` | integer, bytes | `1000000`, `"256MiB"` | The largest file `bigquery_save` writes. |
@@ -78,7 +78,8 @@ The `access` option generates a block of default rules from the plugin's action 
 each agent's base `* * allow` rule:
 
 1. `bigquery.*` at the change effect, so an action the plugin does not declare is treated like a change;
-2. each read (the twelve read tools, `bigquery.saved_list` and `bigquery.probe`), allowed;
+2. each read (the twelve read tools, `bigquery.saved_list` and `bigquery.probe`) and the permission-only
+   `bigquery.read` a source asserts on each operation, allowed;
 3. `bigquery.save`, `bigquery.cancel` and the five commits, at the change effect;
 4. `bigquery.uncapped_read`, asserted before a read the byte cap cannot bound: `ask` at `all` and `ask-changes`, `deny`
    at `read-only`. These are the plugin's rules in local OpenCode. Jelly writes its own: under Allowed it runs such a read

@@ -35,9 +35,11 @@ LIMIT 10
 ```
 
 The input carries values only, so the type comes from the JavaScript value: strings, booleans, integers, floats and
-arrays of them are inferred. A `STRUCT` or a `null` has no type the input can express: pass it as a JSON string and
-`CAST` it in the SQL (`CAST(@p AS STRUCT<a INT64>)`). An integer above 2^53 loses precision as a JSON number, so pass it
-as a string and `CAST` it too. Positional `?` parameters take an array.
+arrays of them are inferred. A `STRUCT` cannot be built from values alone: pass its fields as scalar parameters and
+build it in the SQL (`STRUCT(@a AS a, @b AS b)`), or pass JSON text and read it with
+`JSON_VALUE(PARSE_JSON(@p), '$.a')`. A `null` has no type of its own, so write `CAST(NULL AS INT64)` in the SQL rather
+than passing one. An integer above 2^53 loses precision as a JSON number: pass it as a string and `CAST(@id AS INT64)`
+it. Positional `?` parameters take an array.
 
 ## Dates and partitions
 
@@ -49,15 +51,17 @@ WHERE event_date = DATE '2026-11-01'
 ```
 
 ```sql
+-- An ingestion-time partitioned table, whose pseudo-column is `_PARTITIONTIME`.
 SELECT COUNT(*) AS rows_loaded
-FROM `my-project.my_dataset.events`
+FROM `my-project.my_dataset.events_ingested`
 WHERE _PARTITIONTIME = TIMESTAMP '2026-11-01'
 ```
 
-A `requirePartitionFilter` table refuses a query that filters no partition; `_PARTITIONTIME` is the ingestion-time
-pseudo-column ([Query partitioned tables](https://cloud.google.com/bigquery/docs/querying-partitioned-tables)).
+A `requirePartitionFilter` table refuses a query that filters no partition. Add its partition column's filter; on an
+ingestion-time partitioned table, `_PARTITIONTIME` is that filter
+([Query partitioned tables](https://cloud.google.com/bigquery/docs/querying-partitioned-tables)).
 
-A **wildcard table** is a change to this plugin's guards: nothing can tell which tables a `_TABLE_SUFFIX` selection
+A **wildcard table** is a special case for this plugin's guards: nothing can tell which tables a `_TABLE_SUFFIX` selection
 reads, so the read needs a plan ([Querying wildcard tables](https://cloud.google.com/bigquery/docs/querying-wildcard-tables)).
 Prefer one table or an `INFORMATION_SCHEMA` view for a read that should run inline.
 
@@ -141,9 +145,9 @@ Each dataset has `INFORMATION_SCHEMA` views; they bill at least 10 MB and never 
 ([Introduction to INFORMATION_SCHEMA](https://cloud.google.com/bigquery/docs/information-schema-intro)):
 
 ```sql
-SELECT table_name, table_type, size_bytes, row_count
+SELECT table_name, table_type
 FROM `bigquery-public-data.samples.INFORMATION_SCHEMA.TABLES`
-ORDER BY size_bytes DESC
+ORDER BY table_name
 ```
 
 ```sql
@@ -158,8 +162,13 @@ FROM `bigquery-public-data.samples.INFORMATION_SCHEMA.PARTITIONS`
 ORDER BY total_rows DESC
 ```
 
-`bigquery_search` and `bigquery_table` read these for you. A region- or project-qualified `INFORMATION_SCHEMA` reference
-is refused while the account has an allow fence.
+The columns are each view's own: [TABLES](https://cloud.google.com/bigquery/docs/information-schema-tables),
+[COLUMN_FIELD_PATHS](https://cloud.google.com/bigquery/docs/information-schema-column-field-paths) and
+[PARTITIONS](https://cloud.google.com/bigquery/docs/information-schema-partitions); sizes and row counts are in
+[TABLE_STORAGE](https://cloud.google.com/bigquery/docs/information-schema-table-storage), which is region-qualified.
+`bigquery_search` and `bigquery_table` read these for you; `TABLES` has no size or row count, so use
+`bigquery_list({ details: true })` or worked example 9. A region- or project-qualified `INFORMATION_SCHEMA` reference is
+refused while the account has an allow fence.
 
 ## Worked examples
 
@@ -242,12 +251,15 @@ Each of these reads Google's public data and bills at least the 10 MB minimum on
    FROM (SELECT 1 FROM `bigquery-public-data.samples.shakespeare` TABLESAMPLE SYSTEM (1 PERCENT))
    ```
 
-9. **A dataset's tables by size.**
+9. **A dataset's tables by size.** `TABLE_STORAGE` is region-qualified
+   ([TABLE_STORAGE](https://cloud.google.com/bigquery/docs/information-schema-table-storage)), and the plugin refuses a
+   region-qualified reference while the account has an allow fence; without one, this reads the US multi-region.
 
    ```sql
-   SELECT table_name, size_bytes
-   FROM `bigquery-public-data.crypto_bitcoin.INFORMATION_SCHEMA.TABLES`
-   ORDER BY size_bytes DESC
+   SELECT table_name, total_rows, total_logical_bytes, total_physical_bytes
+   FROM `region-us`.INFORMATION_SCHEMA.TABLE_STORAGE
+   WHERE table_schema = 'crypto_bitcoin'
+   ORDER BY total_logical_bytes DESC
    LIMIT 20
    ```
 

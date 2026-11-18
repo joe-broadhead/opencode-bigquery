@@ -103,8 +103,8 @@ base allow:
 | Value | What runs | What asks |
 | --- | --- | --- |
 | `"all"` (the default) | every tool, the five commits included, and any tool a later release adds | nothing, except the uncapped read below |
-| `"ask-changes"` | the twelve reads and the two method-only reads | each of the five commits, `bigquery_save`, `bigquery_cancel`, and the uncapped read below |
-| `"read-only"` | the twelve reads and the two method-only reads | nothing: those seven are denied, and the uncapped read is denied too |
+| `"ask-changes"` | the twelve reads, the two method-only reads and the permission-only `bigquery.read` | each of the five commits, `bigquery_save`, `bigquery_cancel`, and the uncapped read below |
+| `"read-only"` | the twelve reads, the two method-only reads and the permission-only `bigquery.read` | nothing: those seven are denied, and the uncapped read is denied too |
 
 The table is the block the plugin generates for local OpenCode. The uncapped read is the one run-time ask,
 `bigquery.uncapped_read`: local rules ask at `all` and `ask-changes` and deny at `read-only`. In Jelly, Jelly's own
@@ -329,18 +329,18 @@ applies.
 - **Stop can take about 35 seconds if Google never answers the cancel**: the cancel has a 15-second limit, then two
   10-second `jobs.get` tries and a second cancel. The job is still bounded by its byte cap and time limit, and what it
   billed is reported as unknown.
-- **A `jobs.list` or `datasets.list` page can be missing a location**: Google's `unreachable[]` is not carried
-  ([`datasets.list`](https://cloud.google.com/bigquery/docs/reference/rest/v2/datasets/list)). The events source's "a
-  page or nothing" claim assumes it never is.
+- **A `jobs.list` page that skips a location says so in `unreachable[]`**: the port carries it, and the `bigquery.jobs`
+  source fails the read with `UNAVAILABLE` while the location is unreachable (for up to 7 days), then answers
+  `window-truncated` gaps until it returns. Nothing is lost; a job still running there is listed when it comes back.
 - **A 401 re-sends the token already cached**, with no forced refresh, and no response over 10 MiB is read; at most 8
   requests are in flight per process.
 
 **Sources**
 
-- **Continuous queries never finish, so they are not in the `bigquery.jobs` source**, and a job that finishes later
-  than the 24-hour look-back is lost silently in this version (not yet a gap). A page walks at most 10 `jobs.list`
-  calls, halving its creation-time window until the window fits, so a very busy identity is read in more, narrower
-  pages. `jobs.delete` is not reported as a removal.
+- **Continuous queries never finish, so they are not in the `bigquery.jobs` source.** A job still unfinished 24 hours
+  after it was created is no longer tracked: the read answers a `gap` with `window-truncated`, once. Paging is by
+  creation time, and one `events_list` call makes at most 20 `jobs.list` walk calls (`LIST_CALLS`), answering fewer
+  events with `more: true`. `jobs.delete` is not reported as a removal.
 - **The `bigquery.saved` source** runs at most 1 GiB per read by default, refuses a query whose cost cannot be bounded
   or that cannot use the cache (unless `allowUncached`), and counts each read in the budget. `bigquery_save` writes
   NUMERIC and BIGNUMERIC values as text in JSONL and Parquet.

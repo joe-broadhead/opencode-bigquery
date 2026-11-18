@@ -70,9 +70,10 @@ Budgets are opt-in, in bytes billed, over a local day and/or the session:
 ```
 
 `action: "refuse"` answers `BUDGET_REACHED` before a call starts once the budget is spent; `"warn"` lets the call run
-and says how much is left. The bytes come from each finished job's actual `totalBytesBilled`, recorded in
-`$XDG_STATE_HOME/opencode-bigquery/spend.jsonl` (local days, one line per job, no session id — a hash). The `warn`
-threshold is 10 % of what is left. `bigquery_status` and `/bigquery-status` show today's bytes and dollars.
+and says how much is left. Under either action the plugin adds `BUDGET_WARN` once 10 % or less of the budget is left.
+The bytes come from each finished job's actual `totalBytesBilled`, recorded in
+`$XDG_STATE_HOME/opencode-bigquery/spend.jsonl` (local days, one line per job, no session id — a hash).
+`bigquery_status` and `/bigquery-status` show today's bytes and dollars.
 
 A job nothing polls is not in the ledger, and the reconciliation with Google's `INFORMATION_SCHEMA.JOBS_BY_USER` is not
 built; parallel calls can overspend by up to `maxConcurrentJobs` × what the budget had left (Known limits).
