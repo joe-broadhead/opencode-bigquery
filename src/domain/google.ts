@@ -118,6 +118,8 @@ export interface TableInfo {
   readonly clustering?: { readonly fields?: readonly string[] }
   readonly description?: string
   readonly expirationTime?: string
+  /** The Table resource's streaming buffer: a table with one cannot be cached (review bigquery-9, ruling 5). */
+  readonly streamingBuffer?: { readonly estimatedRows?: string; readonly estimatedBytes?: string; readonly oldestEntryTime?: string }
 }
 
 /** The parts of the Routine resource expansion reads. */

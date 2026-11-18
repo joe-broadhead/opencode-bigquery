@@ -369,7 +369,11 @@ export const SavedListOutput = z.looseObject({
 
 /** The source probe: the identity, with no BigQuery call. */
 export const ProbeInput = z.strictObject({ account, source: z.enum(["jobs", "saved", "bigquery.jobs", "bigquery.saved"]).optional() })
-export const ProbeOutput = z.looseObject({ owner: z.object({ id: z.string(), label: z.string().optional() }).optional(), verified: z.literal(false).optional() })
+/**
+ * The probe's owner. `verified: false` is held back until Jelly and Memory pin source-contract v0.2.0, whose readers
+ * accept it (review bigquery-9, ruling 4); the fallback owner claims no address meanwhile.
+ */
+export const ProbeOutput = z.looseObject({ owner: z.object({ id: z.string(), label: z.string().optional() }).optional() })
 
 /** Every entry's schemas, by name (src/domain/actions.ts). */
 export const SCHEMAS = {
