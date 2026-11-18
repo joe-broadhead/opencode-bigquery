@@ -31,13 +31,6 @@ type StatusAccount = NonNullable<OutputOf<"status">["accounts"]>[number]
 /** The account settings status reads; the options schema fills every default. */
 type Account = { readonly mode?: string; readonly billingProject?: string; readonly location?: string }
 
-/**
- * The device-binding accessor A adds to `AuthPort` (review bigquery-12, contract request 3). Status codes against its
- * shape so the disclosure switches to the stored binding as soon as it lands; until then it answers undefined and the
- * form's pre-binding wording is shown.
- */
-type BindingAccessor = { readonly binding?: (account: string, signal: AbortSignal) => Promise<"bound" | "unbound" | undefined> }
-
 const status: Handlers["status"] = async (input, context) => {
   const { options, ports, call } = context
   const settings = accountsOf(options) as Readonly<Record<string, Account>>
@@ -70,11 +63,11 @@ const status: Handlers["status"] = async (input, context) => {
       if (!(error instanceof BigQueryError)) throw error
       note(error.next)
     }
-    // The stored device binding, when the auth port can name it; never a Google call (review LOW 3, request 3).
+    // The stored device binding, from the sign-in record; never a Google call (design §3.2, review LOW 3).
     let binding: "bound" | "unbound" | undefined
     if (mode === "interactive") {
       try {
-        binding = await (ports.auth as typeof ports.auth & BindingAccessor).binding?.(alias, call.signal)
+        binding = await ports.auth.binding(alias, call.signal)
       } catch {
         binding = undefined
       }
@@ -86,8 +79,8 @@ const status: Handlers["status"] = async (input, context) => {
       ...(account.billingProject !== undefined ? { billingProject: account.billingProject } : {}),
       ...(account.location !== undefined ? { location: account.location } : {}),
       ...(binding !== undefined ? { binding } : {}),
-      // A Read account carries the disclosure: the binding's own wording once Google has answered, and the form's
-      // pre-binding sentence (which says status will say) until then.
+      // A Read account carries the disclosure in the binding's own wording; only before Google has answered (no
+      // sign-in) is it the form's pre-binding sentence, which says status will say.
       ...(mode === "interactive" && level === "read"
         ? { disclosure: binding !== undefined ? DISCLOSURE[binding] : `${DISCLOSURE.bound} ${DISCLOSURE.formSuffix}` }
         : {}),

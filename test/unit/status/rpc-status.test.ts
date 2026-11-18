@@ -4,23 +4,25 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { afterEach, describe, expect, it } from "vitest"
+import { loadOptions } from "../../../src/options.js"
 import { formatStatus, isStatus, STATUS_SCHEMA, statusRows, type Status } from "../../../src/rpc.js"
 import { computeStatus, type StatusDeps } from "../../../src/status.js"
 
-const deps: StatusDeps = {
+/** The parsed options the plugin passes to `registerStatus` (and so to `computeStatus`). */
+const deps = (options?: StatusDeps["options"]): StatusDeps => ({
   access: "all",
   hostVersion: "2.2.3",
   tools: () => ({ registered: 19, notBuilt: 1 }),
   skills: [],
   problems: () => [],
-}
+  ...(options !== undefined ? { options } : {}),
+})
 
 /** The parts of OpenCode's context `computeStatus` reads. */
-const context = (options: unknown) =>
+const context = () =>
   ({
     agent: { list: async () => ({ data: [] }) },
     skill: { list: async () => ({ data: [] }) },
-    ...(options !== undefined ? { options } : {}),
   }) as unknown as Parameters<typeof computeStatus>[0]
 
 const row = (status: Status, label: string) => statusRows(status).find((entry) => entry.label === label)?.value
@@ -45,15 +47,13 @@ describe("the status the command and the TUI read", () => {
       join(state, "opencode-bigquery", "spend.jsonl"),
       `${JSON.stringify({ at: new Date().toISOString(), account: "default", project: "invented-proj", location: "US", jobId: "oc_one", bytesBilled: 2 ** 30, via: "bigquery_query", session: "0123456789abcdef" })}\n`,
     )
-    const status = await computeStatus(
-      context({
-        accounts: { default: { billingProject: "invented-proj", location: "US", datasets: { allow: ["invented-proj.sales"], deny: ["invented-proj.secret"] } } },
-        maxBytesBilled: "10GiB",
-        maxBytesCeiling: "100GiB",
-        budget: { daily: "2GiB", action: "refuse" },
-      }),
-      deps,
-    )
+    const options = loadOptions({
+      accounts: { default: { billingProject: "invented-proj", location: "US", datasets: { allow: ["invented-proj.sales"], deny: ["invented-proj.secret"] } } },
+      maxBytesBilled: "10GiB",
+      maxBytesCeiling: "100GiB",
+      budget: { daily: "2GiB", action: "refuse" },
+    })
+    const status = await computeStatus(context(), deps(options))
     expect(isStatus(status)).toBe(true)
     expect(row(status, "Accounts")).toBe("default (interactive) · invented-proj · US")
     expect(row(status, "Dataset fence")).toBe("default: allow invented-proj.sales; deny invented-proj.secret")
@@ -67,7 +67,7 @@ describe("the status the command and the TUI read", () => {
   })
 
   it("carries no BigQuery rows when the host did not hand over the options", async () => {
-    const status = await computeStatus(context(undefined), deps)
+    const status = await computeStatus(context(), deps())
     expect(isStatus(status)).toBe(true)
     expect(status.details).toBeUndefined()
     expect(statusRows(status).map((entry) => entry.label)).toEqual(["Access", "Tools", "Agents without default rules", "OpenCode", "Next step"])

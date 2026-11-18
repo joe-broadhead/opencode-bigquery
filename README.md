@@ -261,11 +261,9 @@ applies.
   <https://myaccount.google.com/permissions>, and the result says so. Very frequent re-sign-ins on a client shared with
   other apps can retire an old token of theirs, because Google retires the oldest
   ([OAuth 2.0 for desktop apps](https://developers.google.com/identity/protocols/oauth2/native-app)).
-- **Status shows a Read account's disclosure but not the device binding itself, the granted scopes or the last three
-  errors**, and `/bigquery-status` and the TUI do not show each account's level or run the IAM check: reading a level may
-  refresh a token, which only `bigquery_status` does. The disclosure is the form's pre-binding wording (which says status
-  will say) until the auth port exposes the binding, then the binding's own; the failed §3.1 check's reason is a `next`
-  step.
+- **Status shows a Read account's disclosure in the binding's own wording and the failed §3.1 check's reason as a
+  `next` step, but not the granted scopes or the last three errors**, and `/bigquery-status` and the TUI do not show
+  each account's level or run the IAM check: reading a level may refresh a token, which only `bigquery_status` does.
 - **A script cannot answer an ask.** The tools RPC refuses `bigquery_query({ planId })`: an uncapped read runs only from
   a session's tool, where the user sees its preview.
 

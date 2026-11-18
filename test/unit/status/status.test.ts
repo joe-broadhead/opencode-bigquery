@@ -6,7 +6,7 @@ import { StatusOutput } from "../../../src/domain/contract.js"
 import { BigQueryError } from "../../../src/domain/errors.js"
 import { DISCLOSURE } from "../../../src/domain/levels.js"
 import { sessionHash } from "../../../src/guards/session.js"
-import { readRecord, writeRecord, type FakeAuth } from "../../fake/ports.js"
+import { readRecord, writeRecord } from "../../fake/ports.js"
 import { ACCOUNT, LOCATION, PROJECT, callsOf, harness, runTool, twoAccounts } from "./support.js"
 
 /** The contract's own shape: every result is checked against the schema the model and scripts see. */
@@ -28,19 +28,24 @@ describe("bigquery_status", () => {
     expect(h.bigquery.calls).toEqual([])
   })
 
-  it("shows a Read account's disclosure in the form's pre-binding wording until the binding accessor answers", async () => {
-    const h = harness()
-    const plain = await runTool(h, "status", {})
-    const account = (shape(plain.output).accounts as { binding?: string; disclosure?: string }[])[0]!
-    expect(account.binding).toBeUndefined()
-    expect(account.disclosure).toBe(`${DISCLOSURE.bound} ${DISCLOSURE.formSuffix}`)
+  it("shows a Read account's disclosure in the binding's wording, and the form's only before a sign-in", async () => {
+    // A bound sign-in: the stored binding's own sentence.
+    const bound = harness()
+    const stored = (shape((await runTool(bound, "status", {})).output).accounts as { binding?: string; disclosure?: string }[])[0]!
+    expect(stored.binding).toBe("bound")
+    expect(stored.disclosure).toBe(DISCLOSURE.bound)
 
-    // The accessor A adds (contract request 3) switches the wording, and names the binding itself.
-    ;(h.auth as FakeAuth & { binding?: (account: string, signal: AbortSignal) => Promise<"bound" | "unbound" | undefined> }).binding = async () => "unbound"
-    const { output } = await runTool(h, "status", {})
-    const bound = (shape(output).accounts as { binding?: string; disclosure?: string }[])[0]!
-    expect(bound.binding).toBe("unbound")
-    expect(bound.disclosure).toBe(DISCLOSURE.unbound)
+    // An unbound sign-in: the wording without the key file.
+    const unbound = harness({ mode: "interactive", record: readRecord({ binding: "unbound" }), refreshScopes: [] })
+    const weaker = (shape((await runTool(unbound, "status", {})).output).accounts as { binding?: string; disclosure?: string }[])[0]!
+    expect(weaker.binding).toBe("unbound")
+    expect(weaker.disclosure).toBe(DISCLOSURE.unbound)
+
+    // No sign-in at all: the form's pre-binding sentence, which says status will say.
+    const none = harness({ mode: "interactive", refreshScopes: [] })
+    const form = (shape((await runTool(none, "status", {})).output).accounts as { binding?: string; disclosure?: string }[])[0]!
+    expect(form.binding).toBeUndefined()
+    expect(form.disclosure).toBe(`${DISCLOSURE.bound} ${DISCLOSURE.formSuffix}`)
   })
 
   it("says why a Read and write sign-in is read when a §3.1 check fails", async () => {
