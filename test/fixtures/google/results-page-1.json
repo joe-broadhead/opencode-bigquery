@@ -1,0 +1,406 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/bigquery/v2/projects/invented-project/queries/oc_00000000-0000-4000-8000-000000000001"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#getQueryResultsResponse",
+      "etag": "invented-etag",
+      "jobReference": {
+        "projectId": "invented-project",
+        "jobId": "oc_00000000-0000-4000-8000-000000000001",
+        "location": "EU"
+      },
+      "jobComplete": true,
+      "totalRows": "3",
+      "totalBytesProcessed": "987654321",
+      "cacheHit": false,
+      "schema": {
+        "fields": [
+          {
+            "name": "id",
+            "type": "INT64",
+            "mode": "REQUIRED"
+          },
+          {
+            "name": "big",
+            "type": "INT64",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "price",
+            "type": "NUMERIC",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "big_price",
+            "type": "BIGNUMERIC",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "ratio",
+            "type": "FLOAT64",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "special",
+            "type": "FLOAT64",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "ok",
+            "type": "BOOL",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "name",
+            "type": "STRING",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "bin",
+            "type": "BYTES",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "ts",
+            "type": "TIMESTAMP",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "ts_end",
+            "type": "TIMESTAMP",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "ts_start",
+            "type": "TIMESTAMP",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "day",
+            "type": "DATE",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "at",
+            "type": "DATETIME",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "clock",
+            "type": "TIME",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "payload",
+            "type": "JSON",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "geo",
+            "type": "GEOGRAPHY",
+            "mode": "NULLABLE"
+          },
+          {
+            "name": "span",
+            "type": "RANGE",
+            "mode": "NULLABLE",
+            "rangeElementType": {
+              "type": "DATE"
+            }
+          },
+          {
+            "name": "tags",
+            "type": "STRING",
+            "mode": "REPEATED"
+          },
+          {
+            "name": "address",
+            "type": "RECORD",
+            "mode": "NULLABLE",
+            "fields": [
+              {
+                "name": "city",
+                "type": "STRING",
+                "mode": "NULLABLE"
+              },
+              {
+                "name": "zip",
+                "type": "INT64",
+                "mode": "NULLABLE"
+              }
+            ]
+          },
+          {
+            "name": "addresses",
+            "type": "RECORD",
+            "mode": "REPEATED",
+            "fields": [
+              {
+                "name": "city",
+                "type": "STRING",
+                "mode": "NULLABLE"
+              }
+            ]
+          },
+          {
+            "name": "note",
+            "type": "INTERVAL",
+            "mode": "NULLABLE"
+          }
+        ]
+      },
+      "rows": [
+        {
+          "f": [
+            {
+              "v": "1"
+            },
+            {
+              "v": "9007199254740993"
+            },
+            {
+              "v": "123456789.123456789"
+            },
+            {
+              "v": "123456789012345678901234567890.123456789"
+            },
+            {
+              "v": "1.5"
+            },
+            {
+              "v": "NaN"
+            },
+            {
+              "v": "true"
+            },
+            {
+              "v": "a string"
+            },
+            {
+              "v": "aGVsbG8="
+            },
+            {
+              "v": "1700000000123456"
+            },
+            {
+              "v": "253402300799999999"
+            },
+            {
+              "v": "-62135596800000000"
+            },
+            {
+              "v": "2026-11-17"
+            },
+            {
+              "v": "2026-11-17T12:00:00"
+            },
+            {
+              "v": "12:00:00"
+            },
+            {
+              "v": "{\"a\":1}"
+            },
+            {
+              "v": "POINT(1 2)"
+            },
+            {
+              "v": "[2026-01-01, 2026-12-31)"
+            },
+            {
+              "v": [
+                {
+                  "v": "one"
+                },
+                {
+                  "v": "two"
+                }
+              ]
+            },
+            {
+              "v": {
+                "f": [
+                  {
+                    "v": "Lisbon"
+                  },
+                  {
+                    "v": "1000"
+                  }
+                ]
+              }
+            },
+            {
+              "v": [
+                {
+                  "v": {
+                    "f": [
+                      {
+                        "v": "Madrid"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "v": {
+                    "f": [
+                      {
+                        "v": "Porto"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "v": "0-0 0 0:0:0"
+            }
+          ]
+        },
+        {
+          "f": [
+            {
+              "v": "2"
+            },
+            {
+              "v": "-9007199254740993"
+            },
+            {
+              "v": "0.000000001"
+            },
+            {
+              "v": "1"
+            },
+            {
+              "v": "-Infinity"
+            },
+            {
+              "v": "Infinity"
+            },
+            {
+              "v": "false"
+            },
+            {
+              "v": ""
+            },
+            {
+              "v": ""
+            },
+            {
+              "v": "0"
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": "0001-01-01"
+            },
+            {
+              "v": "2026-11-17T00:00:00"
+            },
+            {
+              "v": "00:00:00"
+            },
+            {
+              "v": "null"
+            },
+            {
+              "v": "POINT EMPTY"
+            },
+            {
+              "v": "[UNBOUNDED, 2026-01-01)"
+            },
+            {
+              "v": []
+            },
+            {
+              "v": null
+            },
+            {
+              "v": []
+            },
+            {
+              "v": "1-1 0 0:0:0"
+            }
+          ]
+        },
+        {
+          "f": [
+            {
+              "v": "3"
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            },
+            {
+              "v": null
+            }
+          ]
+        }
+      ],
+      "pageToken": "invented-results-page-2"
+    }
+  }
+}

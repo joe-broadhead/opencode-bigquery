@@ -1,0 +1,46 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/bigquery/v2/projects/invented-project/queries/oc_00000000-0000-4000-8000-000000000005"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#getQueryResultsResponse",
+      "jobReference": {
+        "projectId": "invented-project",
+        "jobId": "oc_00000000-0000-4000-8000-000000000005",
+        "location": "EU"
+      },
+      "jobComplete": true,
+      "totalRows": "1",
+      "totalBytesProcessed": "10485760",
+      "cacheHit": false,
+      "schema": {
+        "fields": [
+          {
+            "name": "x",
+            "type": "INT64",
+            "mode": "NULLABLE"
+          }
+        ]
+      },
+      "rows": [
+        {
+          "f": [
+            {
+              "v": "1"
+            }
+          ]
+        }
+      ],
+      "errors": [
+        {
+          "reason": "invalid",
+          "message": "a warning that did not stop the job",
+          "location": "query"
+        }
+      ]
+    }
+  }
+}

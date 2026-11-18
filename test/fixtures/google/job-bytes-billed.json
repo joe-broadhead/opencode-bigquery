@@ -1,0 +1,25 @@
+{
+  "request": { "method": "POST", "path": "/bigquery/v2/projects/invented-project/jobs", "dryRun": false },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#job",
+      "id": "invented-project:EU.oc_00000000-0000-4000-8000-000000000002",
+      "jobReference": { "projectId": "invented-project", "jobId": "oc_00000000-0000-4000-8000-000000000002", "location": "EU" },
+      "configuration": { "jobType": "QUERY", "query": { "query": "SELECT * FROM `invented-project.invented_dataset.invented_big_table`", "useLegacySql": false, "maximumBytesBilled": "1024" }, "jobTimeoutMs": "600000" },
+      "statistics": {
+        "creationTime": "1763377200000",
+        "endTime": "1763377200500",
+        "query": { "statementType": "SELECT", "totalBytesProcessed": "0", "totalBytesBilled": "0", "totalSlotMs": "0", "cacheHit": false }
+      },
+      "status": {
+        "state": "DONE",
+        "errorResult": {
+          "reason": "bytesBilledLimitExceeded",
+          "location": "query",
+          "message": "Query exceeded the maximum allowed bytes billed limit"
+        }
+      }
+    }
+  }
+}

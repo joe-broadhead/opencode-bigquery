@@ -1,0 +1,46 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/bigquery/v2/projects/invented-project/jobs",
+    "dryRun": false
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "kind": "bigquery#job",
+      "etag": "invented-etag",
+      "id": "invented-project:EU.oc_00000000-0000-4000-8000-000000000001",
+      "jobReference": {
+        "projectId": "invented-project",
+        "jobId": "oc_00000000-0000-4000-8000-000000000001",
+        "location": "EU"
+      },
+      "configuration": {
+        "jobType": "QUERY",
+        "query": {
+          "query": "SELECT id FROM `invented-project.invented_dataset.invented_table`",
+          "useLegacySql": false,
+          "maximumBytesBilled": "10737418240"
+        },
+        "dryRun": false,
+        "jobTimeoutMs": "600000",
+        "labels": {
+          "oc_plugin": "bigquery",
+          "oc_tool": "bigquery_query"
+        }
+      },
+      "statistics": {
+        "creationTime": "1763377200000",
+        "startTime": "1763377200100",
+        "query": {
+          "statementType": "SELECT",
+          "totalSlotMs": "0",
+          "cacheHit": false
+        }
+      },
+      "status": {
+        "state": "RUNNING"
+      }
+    }
+  }
+}

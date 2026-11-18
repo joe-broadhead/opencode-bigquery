@@ -1,0 +1,14 @@
+{
+  "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/queries/oc_00000000-0000-4000-8000-000000000008" },
+  "response": {
+    "status": 503,
+    "body": {
+      "error": {
+        "code": 503,
+        "message": "Backend error. Job aborted.",
+        "errors": [{ "message": "Backend error. Job aborted.", "domain": "global", "reason": "backendError" }],
+        "status": "UNAVAILABLE"
+      }
+    }
+  }
+}
