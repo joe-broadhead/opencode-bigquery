@@ -1,7 +1,7 @@
 // Plans are single-use, expire, and are bound to the session, agent, account and category that made them.
 import { describe, expect, it } from "vitest"
 import { CATEGORIES } from "../../src/domain/actions.js"
-import { commitCall, type Plan, planMetadata, PlanStore } from "../../src/domain/plans.js"
+import { commitCall, type Plan, planMetadata, PlanStore, type PlanTarget } from "../../src/domain/plans.js"
 import { FakeClock } from "../fake/ports.js"
 
 function store() {
@@ -16,11 +16,13 @@ const make = (plans: PlanStore, overrides: Partial<Plan> = {}) =>
     sessionId: "ses_1",
     agentId: "build",
     committable: true,
-    statement: { sql: "INSERT INTO `p.d.t` VALUES (1)", project: "invented-proj", location: "EU", statementType: "INSERT", targets: ["invented-proj.d.t"], estimateBytes: 0, capBytes: 10, capEnforceable: true, jobTimeoutSeconds: 600 },
+    statement: { sql: "INSERT INTO `p.d.t` VALUES (1)", project: "invented-proj", location: "EU", statementType: "INSERT", targets: [TARGET], estimateBytes: 0, capBytes: 10, capEnforceable: true, jobTimeoutSeconds: 600 },
     preview: { category: "write", statementType: "INSERT", targets: ["invented-proj.d.t"], referenced: [], bytes: 0, accuracy: "PRECISE", usd: 0, capBytes: 10, bound: "The cap bounds this statement." },
     ttlSeconds: 300,
     ...overrides,
   })
+
+const TARGET: PlanTarget = { kind: "table", project: "invented-proj", dataset: "d", name: "t", label: "invented-proj.d.t" }
 
 const binding = { sessionId: "ses_1", agentId: "build", account: "work", category: "write" as const }
 
@@ -73,5 +75,13 @@ describe("the plan store", () => {
     const metadata = planMetadata(plan)
     expect(JSON.stringify(metadata)).not.toContain("invented-value")
     expect(Object.keys(metadata).sort()).toEqual(["account", "bound", "bytes", "capBytes", "category", "expiresAt", "planId", "sql", "statementType", "targets", "usd"])
+  })
+
+  it("shows a prompt each structured target's label (contract request from package D)", () => {
+    const { plans } = store()
+    const policy: PlanTarget = { kind: "row access policy", project: "invented-proj", dataset: "d", name: "t", policyId: "p1", label: "invented-proj.d.t (row access policy p1)" }
+    const plan = make(plans, { statement: { sql: "DROP ROW ACCESS POLICY p1 ON `invented-proj.d.t`", project: "invented-proj", location: "EU", statementType: "DROP_ROW_ACCESS_POLICY", targets: [TARGET, policy], estimateBytes: 0, capBytes: 1, capEnforceable: true, jobTimeoutSeconds: 600 } })
+    expect(planMetadata(plan).targets).toEqual(["invented-proj.d.t", "invented-proj.d.t (row access policy p1)"])
+    expect(plan.statement.targets[1]).toEqual(policy)
   })
 })

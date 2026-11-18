@@ -14,6 +14,21 @@ import type { StatementType } from "./statements.js"
 
 const MAX_PLANS = 512
 
+/**
+ * One object a change creates, changes or drops, as the dry run names it (src/domain/google.ts, `ddlTarget*` and
+ * `dclTarget*`). A commit asserts each as a resource (`tableResource`, or a dataset resource for a dataset) and compares
+ * them structurally for `PLAN_CHANGED`. For a dataset, `name` is the dataset too. `label` is what a person reads, such
+ * as `proj.ds.t`.
+ */
+export interface PlanTarget {
+  readonly kind: "table" | "view" | "dataset" | "routine" | "row access policy"
+  readonly project: string
+  readonly dataset: string
+  readonly name: string
+  readonly policyId?: string
+  readonly label: string
+}
+
 /** What a commit runs and re-checks: the exact text and parameters, and what the plan's dry run saw. */
 export interface PlannedStatement {
   readonly sql: string
@@ -21,8 +36,8 @@ export interface PlannedStatement {
   readonly project: string
   readonly location: string
   readonly statementType: StatementType
-  /** The objects the statement creates, changes or drops, as `project.dataset.name`. */
-  readonly targets: readonly string[]
+  /** The objects the statement creates, changes or drops. */
+  readonly targets: readonly PlanTarget[]
   readonly estimateBytes: number
   /** The `maximumBytesBilled` the commit carries. */
   readonly capBytes: number
@@ -177,7 +192,7 @@ export function planMetadata(plan: Plan): Record<string, unknown> {
     category: plan.category,
     account: plan.account,
     statementType: plan.preview.statementType,
-    targets: [...plan.preview.targets],
+    targets: plan.statement.targets.map((target) => target.label),
     bytes: plan.preview.bytes,
     usd: plan.preview.usd,
     capBytes: plan.preview.capBytes,

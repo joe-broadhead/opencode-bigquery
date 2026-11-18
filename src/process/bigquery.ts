@@ -557,7 +557,10 @@ function parameterMode(parameters: readonly QueryParameter[]): "NAMED" | "POSITI
 /**
  * The dry run's `statistics.query`, field by field, so nothing else from Google's answer reaches the guards. A
  * referenced list with an entry that carries no ids is not a list the fence can check: the dry run is incomplete
- * (design §5.1 steps 6 and 7), never a list to guess at.
+ * (design §5.1 steps 6 and 7), never a list to guess at. The change fields (`ddlTarget*`, `dclTarget*`,
+ * `ddlDestinationTable`, `ddlOperationPerformed`, `numDmlAffectedRows`) pass through from JobStatistics2
+ * (https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#jobstatistics2, read 2026-11-18) for package D's targets;
+ * a target that names no project, dataset or object is incomplete too, because the fence and the asserts read it.
  */
 function dryRunStatistics(statistics: {
   readonly statementType?: string
@@ -568,6 +571,16 @@ function dryRunStatistics(statistics: {
   readonly referencedRoutines?: readonly RoutineReference[]
   readonly referencedPropertyGraphs?: readonly { readonly projectId?: string; readonly datasetId?: string; readonly propertyGraphId?: string }[]
   readonly schema?: { readonly fields?: readonly unknown[] }
+  readonly ddlOperationPerformed?: string
+  readonly ddlTargetTable?: Partial<TableReference>
+  readonly ddlDestinationTable?: Partial<TableReference>
+  readonly ddlTargetRowAccessPolicy?: { readonly projectId?: string; readonly datasetId?: string; readonly tableId?: string; readonly policyId?: string }
+  readonly ddlTargetRoutine?: Partial<RoutineReference>
+  readonly ddlTargetDataset?: { readonly projectId?: string; readonly datasetId?: string }
+  readonly dclTargetTable?: Partial<TableReference>
+  readonly dclTargetView?: Partial<TableReference>
+  readonly dclTargetDataset?: { readonly projectId?: string; readonly datasetId?: string }
+  readonly numDmlAffectedRows?: string
 }): NonNullable<DryRunAnswer["statistics"]> {
   return {
     ...(statistics.statementType !== undefined ? { statementType: statistics.statementType } : {}),
@@ -578,7 +591,32 @@ function dryRunStatistics(statistics: {
     ...(statistics.referencedRoutines !== undefined ? { referencedRoutines: routines(statistics.referencedRoutines) } : {}),
     ...(statistics.referencedPropertyGraphs !== undefined ? { referencedPropertyGraphs: graphs(statistics.referencedPropertyGraphs) } : {}),
     ...(statistics.schema !== undefined ? { schema: statistics.schema as NonNullable<DryRunAnswer["statistics"]>["schema"] } : {}),
+    ...(typeof statistics.ddlOperationPerformed === "string" ? { ddlOperationPerformed: statistics.ddlOperationPerformed } : {}),
+    ...(statistics.ddlTargetTable !== undefined ? { ddlTargetTable: references([statistics.ddlTargetTable], "DDL target table")[0]! } : {}),
+    ...(statistics.ddlDestinationTable !== undefined ? { ddlDestinationTable: references([statistics.ddlDestinationTable], "DDL destination table")[0]! } : {}),
+    ...(statistics.ddlTargetRowAccessPolicy !== undefined ? { ddlTargetRowAccessPolicy: policyTarget(statistics.ddlTargetRowAccessPolicy) } : {}),
+    ...(statistics.ddlTargetRoutine !== undefined ? { ddlTargetRoutine: routines([statistics.ddlTargetRoutine])[0]! } : {}),
+    ...(statistics.ddlTargetDataset !== undefined ? { ddlTargetDataset: datasetTarget(statistics.ddlTargetDataset, "DDL target dataset") } : {}),
+    ...(statistics.dclTargetTable !== undefined ? { dclTargetTable: references([statistics.dclTargetTable], "DCL target table")[0]! } : {}),
+    ...(statistics.dclTargetView !== undefined ? { dclTargetView: references([statistics.dclTargetView], "DCL target view")[0]! } : {}),
+    ...(statistics.dclTargetDataset !== undefined ? { dclTargetDataset: datasetTarget(statistics.dclTargetDataset, "DCL target dataset") } : {}),
+    ...(typeof statistics.numDmlAffectedRows === "string" && /^\d+$/.test(statistics.numDmlAffectedRows) ? { numDmlAffectedRows: statistics.numDmlAffectedRows } : {}),
   }
+}
+
+/** A dataset target the fence can use: it names its project and dataset. */
+function datasetTarget(entry: { readonly projectId?: string; readonly datasetId?: string }, what: string): { readonly projectId: string; readonly datasetId: string } {
+  if (typeof entry.projectId !== "string" || typeof entry.datasetId !== "string" || entry.projectId === "" || entry.datasetId === "") {
+    throw new BigQueryError("DRY_RUN_INCOMPLETE", `The dry run's ${what} names no project or dataset`)
+  }
+  return { projectId: entry.projectId, datasetId: entry.datasetId }
+}
+
+/** A row access policy target (RowAccessPolicyReference): its table and its policy id. */
+function policyTarget(entry: { readonly projectId?: string; readonly datasetId?: string; readonly tableId?: string; readonly policyId?: string }) {
+  const [table] = references([entry], "DDL target row access policy")
+  if (typeof entry.policyId !== "string" || entry.policyId === "") throw new BigQueryError("DRY_RUN_INCOMPLETE", "The dry run's DDL target row access policy names no policy")
+  return { ...table!, policyId: entry.policyId }
 }
 
 /** A table or view list the fence can use: every entry names its project, dataset and table. */
