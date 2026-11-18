@@ -22,6 +22,11 @@ export type Status = {
   readonly problems?: readonly string[]
   readonly host: { readonly version: string; readonly range: string; readonly tested: boolean }
   readonly hostWarning?: string
+  /**
+   * BigQuery's own rows, formatted by the server part (`src/status.ts`) from the options and the local spend ledger:
+   * the accounts, the dataset fence, the byte caps and what was billed today. No request to Google.
+   */
+  readonly details?: readonly StatusRow[]
   readonly nextStep: string
 }
 
@@ -33,6 +38,9 @@ const object = (properties: Record<string, object>, required: readonly string[])
 
 const rule = object({ action: text, resource: text, effect: { enum: EFFECTS } }, ["action", "resource", "effect"])
 const skillPath = object({ id: text, path: text }, ["id", "path"])
+/** One labelled row of BigQuery's own status (`Status.details`). */
+export type StatusRow = { readonly label: string; readonly value: string }
+const statusRow = object({ label: text, value: text }, ["label", "value"])
 
 export const STATUS_SCHEMA = object(
   {
@@ -45,6 +53,7 @@ export const STATUS_SCHEMA = object(
     problems: texts,
     host: object({ version: text, range: text, tested: { type: "boolean" } }, ["version", "range", "tested"]),
     hostWarning: text,
+    details: { type: "array", items: statusRow },
     nextStep: text,
   },
   ["version", "access", "tools", "unguardedAgents", "host", "nextStep"],
@@ -72,6 +81,7 @@ const optional = (value: unknown, check: (value: unknown) => boolean) => value =
 const isRule = (value: unknown) =>
   isRecord(value) && only(value, ["action", "resource", "effect"]) && isText(value.action) && isText(value.resource) && EFFECTS.includes(value.effect as never)
 const isSkillPath = (value: unknown) => isRecord(value) && only(value, ["id", "path"]) && isText(value.id) && isText(value.path)
+const isStatusRow = (value: unknown) => isRecord(value) && only(value, ["label", "value"]) && isText(value.label) && isText(value.value)
 
 /** JSON Schema outputs reach clients unchecked, so readers check a status against the schema's rules. */
 export function isStatus(value: unknown): value is Status {
@@ -87,6 +97,7 @@ export function isStatus(value: unknown): value is Status {
     optional(value.problems, isTexts) &&
     isRecord(host) && only(host, ["version", "range", "tested"]) && isText(host.version) && isText(host.range) && typeof host.tested === "boolean" &&
     optional(value.hostWarning, isText) &&
+    optional(value.details, (rows) => Array.isArray(rows) && rows.every(isStatusRow)) &&
     isText(value.nextStep)
   )
 }
@@ -99,14 +110,12 @@ export const AGENT_STEP = `Put the default rules shown by /${STATUS_COMMAND} fir
 
 const NONE = "none"
 
-export type StatusRow = { readonly label: string; readonly value: string }
-
 export function formatRules(rules: readonly Rule[]): string {
   return `[\n${rules.map((item) => `  ${JSON.stringify(item)}`).join(",\n")}\n]`
 }
 
 const ACCESS_TEXT: Record<Access, string> = {
-  all: "every tool runs without asking, changes included; a query the byte cap cannot bound still asks",
+  all: "every tool runs without asking, changes included",
   "ask-changes": "reads run without asking; every commit, save and cancel asks first",
   "read-only": "reads run without asking; every commit, save and cancel is denied",
 }
@@ -130,6 +139,7 @@ export function statusRows(status: Status): StatusRow[] {
     { label: "Agents without default rules", value: status.unguardedAgents.length > 0 ? status.unguardedAgents.join(", ") : NONE },
     ...(status.shadowedSkills?.length ? [{ label: "Skills", value: status.shadowedSkills.map((skill) => `${skill.id} replaced by ${skill.path}`).join("; ") }] : []),
     ...(status.problems?.length ? [{ label: "Problems", value: status.problems.join(" ") }] : []),
+    ...(status.details ?? []),
     { label: "OpenCode", value: describeHost(status) },
     { label: "Next step", value: status.nextStep },
   ]

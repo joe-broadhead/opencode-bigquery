@@ -17,7 +17,7 @@ option, so a typo cannot leave the plugin more open than you meant.
 
 ## Options
 
-The options are the contract's (design §12); the tools that read most of them are being built.
+The options are the contract's (design §12). Every one is optional; the defaults are safe for a read-only account.
 
 | Option | Type | Default | What it does |
 | --- | --- | --- | --- |
@@ -37,7 +37,7 @@ The options are the contract's (design §12); the tools that read most of them a
 | `maxConcurrentJobs` | integer | `4` | Running jobs per account. |
 | `scripts` | boolean | `true` | Whether a multi-statement script may be planned. |
 | `uncappedReads` | `"ask"` or `"refuse"` | `"ask"` | Whether a read the byte cap cannot bound may run from a plan. With `"ask"` the plugin asserts `bigquery.uncapped_read`: the default rules below ask at `all` and `ask-changes` and deny at `read-only`; in Jelly, Allowed runs it without asking. `"refuse"` never runs one. |
-| `policyTagged` | `"withhold"` or `"allow"` | `"withhold"` | Whether values of policy-tagged columns may reach the model. |
+| `policyTagged` | `"withhold"` or `"allow"` | `"withhold"` | Whether values of policy-tagged columns may reach the model. A query over **any** table with a tagged column returns no rows inline while this is `"withhold"`, because BigQuery's dry run names the tables a query reads but not its columns; the result is save-only instead ([Job resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job)). |
 | `savedQueries` | object: name → `{ sql, project?, location?, maxBytes?, allowUncached? }` | `{}` | The queries the `bigquery.saved` source may run. On-demand pricing, about $6.25 per TiB billed; at most 1 GiB billed per read unless you raise it (`maxBytes`); cached reads are free. |
 | `planTtlSeconds` | integer | `300` | How long a plan can be committed. |
 | `admin` | `{ enabled, requireReason }` | both `true` | Admin plans. |
@@ -50,6 +50,26 @@ Each account takes `mode` (`interactive`, the default; `adc`; `token`), `level` 
 such as `"proj.dataset"`, `"proj.*"` or `"*.sales_*"`), `inline` (`{ deny }`: datasets whose results are save-only),
 `oauthClient`, `tokenEnv` (a `token` account's variable), `impersonate` (an `adc` account's service account) and
 `scopes`. No option holds a secret.
+
+The dataset fence is checked against every table, view, routine and property graph BigQuery's dry run names, and every
+base table a view or routine body reaches, before anything runs. Deny wins; `"proj.*"` and `"*.sales_*"` are
+wildcards. A fenced read is refused with `DATASET_FENCED` on every path, sources included.
+
+## Results, saves and status
+
+- **Inline results** carry at most `maxRows` rows (50 by default), `maxInlineBytes` (32 KiB by default) and 200
+  characters per cell. A larger result is truncated with `truncated` and a `next` that saves it or asks for another
+  page.
+- **`bigquery_save`** writes the whole result to a project-relative path under `resultsDir`, or under `allowedRoots`, in
+  CSV, JSONL or Parquet: at most `maxSaveRows` and `maxSaveBytes`, streamed, with a SHA-256 and a `charts` hint in the
+  answer.
+- **A table with policy-tagged columns makes the result save-only**, unless `policyTagged` is `"allow"`; a dataset in
+  `inline.deny` does the same with the `INLINE_DENIED` warning. The rows stay in the job's result table, and
+  `bigquery_save` reads them from there.
+- **Status**: `/bigquery-status` and the TUI dialog make no request to Google; `bigquery_status` reads each account's
+  level (which may refresh a token once in a process) and runs the IAM check once after a Read sign-in. Its `include`
+  adds free checks: `jobs` lists running jobs, `iam` runs the IAM check, and `spend` is the ledger the status already
+  reads. See the README's [Known limits](../README.md#known-limits) for what status cannot show yet.
 
 ## Permissions
 
