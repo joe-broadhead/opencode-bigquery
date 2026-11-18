@@ -1,17 +1,22 @@
 // The source contract's conformance kit over both sources `package.json` declares (design §10, §15): the declaration,
-// `bigquery.jobs`' pages, the `bigquery.saved` snapshot, `probe` and the bind-time `saved_list`, run through the
-// plugin's own specs against invented Google answers — no Google call. The report is written to
-// reports/conformance-report.json, which the release workflow's conformance job reads (`scripts/release-rules.mjs`).
+// `bigquery.jobs`' pages, the `bigquery.saved` snapshot, `probe` and the bind-time `saved_list`, against invented Google
+// answers — no Google call. The report is written to reports/conformance-report.json, which the release workflow's
+// conformance job reads (`scripts/release-rules.mjs`).
 //
-// Every check either runs or does not apply. `bigquery.jobs` declares `atomicPages` (one window's `jobs.list` pages, or
-// nothing) and does **not** declare `noExpiry`: BigQuery keeps job history six months, so the expired-cursor check runs.
+// The kit runs under the grants a real consumer makes: it derives them itself from the declaration
+// (`permission.sessionRules`, the probe's and the bind step's rules), so no grant here is written by hand, and every
+// call goes through the tools RPC's method path (`scriptMethod`: the strict input check, the registry's assert, the
+// source's own `bigquery.read` asserts) with the inputs the contract's reader sends: `{ source, account }` to probe and
+// the suggest tool, `{ source, account, scope, name }` to the snapshot.
 //
-// Two contract requests are visible here, both in this pull request's description:
-// - the kit's `billed-cost` check cannot apply to a billed *snapshot* (it is neither an events source nor a non-billed
-//   one), so the snapshot is checked under the same price table with class `metered`, the family's precedent; the
-//   declaration itself stays `billed` and is validated by test/conformance/declaration.test.ts;
-// - `probe` and `saved_list` receive `{ source, account }` from the contract's reader, but Day 0's `ProbeInput` and
-//   `SavedListInput` are strict and do not accept `source`; the adapter drops it, and the request asks for the field.
+// Every check either runs or does not apply. `bigquery.jobs` declares `atomicPages` (a page is built from complete
+// `jobs.list` answers, or not at all) and does **not** declare `noExpiry`: BigQuery keeps job history six months, so the
+// expired-cursor check runs.
+//
+// One override is recorded in the report (`notes`): the kit's `billed-cost` check cannot apply to a billed *snapshot*
+// (it is neither an events source nor a non-billed one), so the snapshot is checked under the same price table with
+// class `metered`. The declaration itself stays `billed` and is validated by test/conformance/declaration.test.ts and
+// by the first test below; the contract's fix is a v0.2.1 patch (review bigquery-9, ruling 3).
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { describe, expect, test } from "bun:test"
@@ -28,9 +33,9 @@ import {
 } from "@we-the-rebel-alliance/source-contract/conformance"
 import { TOOLS_RPC_ID } from "../../../src/host/script-methods.js"
 import { bindingOf } from "../../../src/sources/cursor.js"
-import { probeSource, type SourceDeps } from "../../../src/sources/index.js"
 import { loadOptions } from "../../../src/options.js"
 import { toolSpecs } from "../../../src/registry.js"
+import { scriptMethod } from "../../../src/tool-spec.js"
 import { fakePorts, readRecord } from "../../fake/ports.js"
 import { job, jobStatus, nativeRead, PROJECT, resultPage, serveJobs, statistics, type JobFixture } from "../../unit/sources/support.js"
 
@@ -52,30 +57,18 @@ const ports = fakePorts({ work: { mode: "interactive", record: readRecord({ emai
 const specs = toolSpecs(options, ports)
 const tools: ToolDeclaration[] = specs.filter((spec) => spec.class === "read" && spec.readOnly).map((spec) => ({ id: spec.name, readOnly: true }))
 
-/** A call bound to the kit's session permission, as the tools RPC binds a script's call. */
-function callFor(context: SessionContext) {
-  return {
-    sessionID: "ses_conformance",
-    agent: "build",
-    messageID: "msg_conformance",
-    id: "call_conformance",
-    signal: new AbortController().signal,
-    via: "rpc" as const,
-    assert: (request: { action: string; resources?: readonly string[] }) => context.permission.assert({ action: request.action, resources: [...(request.resources ?? ["*"])] }),
-  }
-}
-
-/** The dependencies a source function reads with, bound to the kit's session and its account. */
-function depsFor(context: SessionContext, account: string): SourceDeps {
-  return { ports, options, account, call: callFor(context) as never }
-}
-
-/** Run one of the plugin's specs the way a script's tools RPC call does, under the kit's permission. */
+/**
+ * One of the plugin's methods, called the way the tools RPC calls it: the method's strict input check, then the spec,
+ * with the host's assert being the kit's recording session permission.
+ */
 async function run(context: SessionContext, name: string, input: Record<string, unknown>): Promise<unknown> {
   const spec = specs.find((candidate) => candidate.name === name)
   if (!spec) throw new Error(`no spec named ${name}`)
-  const outcome = await spec.run(input as never, callFor(context) as never)
-  return outcome.output
+  const method = scriptMethod(spec, async (request) => {
+    await context.permission.assert({ action: request.action, resources: [...request.resources] })
+  })
+  const identity = { sessionID: "ses_conformance", agent: "build", messageID: "msg_conformance", id: "call_conformance", signal: new AbortController().signal }
+  return method.run(input as never, identity as never)
 }
 
 /** The three recent jobs, one with a secret-shaped statement type, and a day of bulk for the truncation case. */
@@ -100,11 +93,13 @@ const iso = (ms: number) => new Date(ms).toISOString()
 const cases: PageCase[] = [
   { name: "the last three hours, with a secret-shaped title refused", input: { source: "jobs", account: "work", since: iso(NOW - 3 * HOUR) }, expect: "page" },
   { name: "nothing since the last listing", input: { source: "jobs", account: "work", since: iso(NOW - 10 * 60_000) }, expect: "empty" },
-  { name: "a cursor older than the six months BigQuery keeps", input: { source: "jobs", account: "work", cursor: encodeBoundCursor(bindingOf("work", undefined), { w: NOW - 181 * DAY, f: NOW - 182 * DAY, e: NOW - 181 * DAY }) }, expect: "expired" },
-  { name: "another account's cursor", input: { source: "jobs", account: "work", cursor: encodeBoundCursor(bindingOf("other", undefined), { w: NOW, f: NOW - HOUR, e: NOW }) }, expect: { refuses: "CURSOR_INVALID" } },
-  { name: "another plugin's cursor", input: { source: "jobs", account: "work", cursor: encodeBoundCursor({ plugin: "other-plugin", source: "jobs", account: "work" }, { w: NOW, f: NOW - HOUR, e: NOW }) }, expect: { refuses: "CURSOR_INVALID" } },
+  { name: "a cursor older than the six months BigQuery keeps", input: { source: "jobs", account: "work", cursor: encodeBoundCursor(bindingOf("work", undefined), { e: NOW - 181 * DAY, f: NOW - 182 * DAY }) }, expect: "expired" },
+  { name: "an expired cursor read one job a page, so the gap must not repeat", input: { source: "jobs", account: "work", limit: 1, cursor: encodeBoundCursor(bindingOf("work", undefined), { e: NOW - 181 * DAY, f: NOW - 182 * DAY }) }, expect: "expired" },
+  { name: "another account's cursor", input: { source: "jobs", account: "work", cursor: encodeBoundCursor(bindingOf("other", undefined), { e: NOW, f: NOW - HOUR }) }, expect: { refuses: "CURSOR_INVALID" } },
+  { name: "another plugin's cursor", input: { source: "jobs", account: "work", cursor: encodeBoundCursor({ plugin: "other-plugin", source: "jobs", account: "work" }, { e: NOW, f: NOW - HOUR }) }, expect: { refuses: "CURSOR_INVALID" } },
   { name: "a confirmed scope", input: { source: "jobs", account: "work", since: iso(NOW - 3 * HOUR), scope: { projects: ["invented-proj"] } }, expect: "page" },
-  { name: "a day of jobs, more than ten listings carry", input: { source: "jobs", account: "work", since: iso(NOW - 24 * HOUR), limit: 100 }, expect: "page" },
+  { name: "a day of jobs, more than one events_list call's walk", input: { source: "jobs", account: "work", since: iso(NOW - 24 * HOUR), limit: 100 }, expect: "page" },
+  { name: "a day of jobs, one a page", input: { source: "jobs", account: "work", since: iso(NOW - 24 * HOUR), limit: 1 }, expect: "page" },
 ]
 
 const reports: ConformanceReport[] = []
@@ -123,51 +118,26 @@ describe("the source contract's conformance kit", () => {
       // The kit's `billed-cost` check cannot mark a billed snapshot "not applicable" (see the header); `metered` is the
       // same price table and the shape the kit can check. The declaration is unchanged and validated above.
       const underTest = !events && source.cost.class === "billed" ? { ...source, cost: { ...source.cost, class: "metered" as const } } : source
-      const grants = events
-        ? [
-            { action: "bigquery.events_list", resource: "*" },
-            { action: "bigquery.events_list", resource: "{account}:bigquery.jobs.list" },
-            { action: "bigquery.probe", resource: "*" },
-          ]
-        : [
-            { action: "bigquery.saved_read", resource: "*" },
-            ...[
-              "bigquery.jobs.getQueryResults",
-              "bigquery.jobs.query",
-              "bigquery.routines.get",
-              "bigquery.rowAccessPolicies.list",
-              "bigquery.tabledata.list",
-              "bigquery.tables.get",
-            ].map((operation) => ({ action: "bigquery.saved_read", resource: `{account}:${operation}` })),
-            { action: "bigquery.probe", resource: "*" },
-          ]
       const report = await sourceConformance({
         plugin: "google-cloud.bigquery",
         source: underTest as typeof source,
         tools,
         account: "work",
-        grants,
         sources: { rpc: (pkg.sources as { rpc: string }).rpc, probe: (pkg.sources as { probe: { action: string } }).probe },
         describe: { id: TOOLS_RPC_ID },
-        atomicPages: {
-          reason: "a page is built from complete jobs.list listings of one creation-time window, or not at all: a failed call fails the whole events_list, so no single job can fail on its own",
-        },
+        ...(events
+          ? {
+              atomicPages: {
+                reason: "a page is built from complete jobs.list answers, or not at all: any failed call fails the whole events_list and leaves the cursor where it was, so no single job can fail on its own",
+              },
+            }
+          : {}),
         calls: {
           list: (input, context) => run(context, "events_list", input as Record<string, unknown>),
-          // The contract's reader calls probe with `{ source, account }`; Day 0's `ProbeInput` refuses `source` (a
-          // contract request), so the adapter asserts the probe action as the registry does and calls the source itself.
-          probe: async (input, context) => {
-            await context.permission.assert({ action: "bigquery.probe", resources: ["*"] })
-            return probeSource(depsFor(context, "work"), input)
-          },
-          // The kit's bind grant for a suggest operation is `<namespace>.read` on `<account>:<operation>`; Day 0's
-          // action table has no `bigquery.read` to assert it with (a contract request). The adapter records that grant's
-          // assert, then runs the method, whose own assert is the `saved_list` action on the same operation.
-          suggest: async (input, context) => {
-            await context.permission.assert({ action: "bigquery.read", resources: ["work:bigquery.jobs.queryEstimate"] })
-            return run(context, "saved_list", { account: String((input as { account?: string }).account ?? "work") })
-          },
-          snapshot: (input, context) => run(context, "saved_read", { source: "saved", account: "work", name: String((input as { name?: string }).name ?? "revenue") }),
+          probe: (input, context) => run(context, "probe", input as Record<string, unknown>),
+          suggest: (input, context) => run(context, "saved_list", input as Record<string, unknown>),
+          // The contract's reader sends the item's input, the account, the confirmed scope and the resolved params.
+          snapshot: (input, context) => run(context, "saved_read", { ...source.input, account: "work", scope: { queries: ["revenue"] }, ...(input as Record<string, unknown>) }),
         },
         cases: events ? cases : [],
         snapshotCases: events ? [] : [{ name: "revenue" }],
@@ -186,6 +156,9 @@ describe("the source contract's conformance kit", () => {
       plugin: pkg.name,
       version: pkg.version,
       contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.2.0" },
+      notes: [
+        "bigquery.saved is declared cost.class billed and was checked as metered, with the same price table: the kit's billed-cost check (v0.2.0) is neither run nor not-applicable for a billed snapshot, which answers no page to price. Remove this override when source-contract v0.2.1's billed-cost patch is pinned (review bigquery-9, ruling 3).",
+      ],
       sources: reports,
     }
     mkdirSync(join(ROOT, "reports"), { recursive: true })

@@ -66,11 +66,15 @@ function fake() {
         return Response.json({ email: "ada@example.invalid", email_verified: true, scope: "https://www.googleapis.com/auth/bigquery" })
       }
       if (request.method === "GET" && url.pathname === `/bigquery/v2/projects/${PROJECT}/jobs`) {
-        // `jobs.list` as the reference describes it: a creation-time window, done jobs only, newest first.
-        if (url.searchParams.get("stateFilter") !== "DONE") return googleError(400, "invalid", "stateFilter must be DONE")
+        // `jobs.list` as the reference describes it: a creation-time window, one state, newest first. The one job is
+        // DONE; nothing is queued or running. Bun's answer carries an HTTP Date, Google's clock to the source.
+        const state = url.searchParams.get("stateFilter")
+        if (state !== "DONE" && state !== "PENDING" && state !== "RUNNING") return googleError(400, "invalid", "stateFilter must be a job state")
         if (url.searchParams.get("allUsers") !== "false") return googleError(400, "invalid", "allUsers must be false")
-        if (Number(url.searchParams.get("maxCreationTime")) < Number(url.searchParams.get("minCreationTime"))) return googleError(400, "invalid", "an empty window")
-        return Response.json({ kind: "bigquery#jobList", etag: "invented", jobs: [job] })
+        const min = url.searchParams.get("minCreationTime")
+        const max = url.searchParams.get("maxCreationTime")
+        if (min !== null && max !== null && Number(max) < Number(min)) return googleError(400, "invalid", "an empty window")
+        return Response.json({ kind: "bigquery#jobList", etag: "invented", jobs: state === "DONE" ? [job] : [] })
       }
       if (request.method === "GET" && url.pathname === `/bigquery/v2/projects/${PROJECT}/jobs/job-1`) {
         return Response.json(job)
@@ -144,9 +148,15 @@ describe("the sources in a host", () => {
       const names = described.methods.map((method) => method.name)
       for (const name of ["events_list", "saved_read", "saved_list", "probe"]) expect(names).toContain(name)
 
-      // probe reads the sign-in through package A's real token-mode port; the fake answers Google's token-info.
-      const probed = (await tools.probe!({ sessionID: await session(host), input: { account: "work" } })) as Record<string, unknown>
-      expect(probed).toMatchObject({ source: "jobs", account: "work", owner: { id: "mailto:ada@example.invalid" }, trust: "untrusted" })
+      // probe reads the sign-in through package A's real token-mode port; the fake answers Google's token-info. A
+      // consumer sends the item's `input.source` with the account (source-contract L2), for each source.
+      for (const source of ["jobs", "saved"]) {
+        const probed = (await tools.probe!({ sessionID: await session(host), input: { source, account: "work" } })) as Record<string, unknown>
+        expect(probed).toMatchObject({ source, account: "work", owner: { id: "mailto:ada@example.invalid" }, trust: "untrusted" })
+      }
+      // The bind step's suggest call, as the contract's reader makes it: the source's id and the account.
+      const suggested = (await tools.saved_list!({ sessionID: await session(host), input: { source: "bigquery.saved", account: "work" } })) as Record<string, unknown>
+      expect(suggested["options"]).toEqual([{ id: "revenue", label: "revenue: SELECT id FROM sales.orders" }])
       const page = (await tools.events_list!({ sessionID: await session(host), input: { source: "jobs", account: "work" } })) as Record<string, unknown>
       expect(page).toMatchObject({ source: "jobs", account: "work", owner: { id: "mailto:ada@example.invalid" }, trust: "untrusted", more: false })
       expect((page["events"] as { external_id: string }[]).map((event) => event.external_id)).toEqual(["invented-proj:US:job-1"])
