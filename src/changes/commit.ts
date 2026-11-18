@@ -20,7 +20,7 @@ import { operationResource } from "../domain/accounts.js"
 import type { InputOf, OutputOf } from "../domain/contract.js"
 import { BigQueryError } from "../domain/errors.js"
 import { requireWrite } from "../domain/levels.js"
-import { type Plan, type PlannedStatement } from "../domain/plans.js"
+import { type Plan } from "../domain/plans.js"
 import type { HandlerContext } from "../registry.js"
 import { asCallError } from "../guards/callerrors.js"
 import { capAndBudget, usdFor } from "../guards/cost.js"
@@ -29,9 +29,9 @@ import { prepareRead, readContext, type PreparedRead } from "../guards/read.js"
 import { sessionHash } from "../guards/session.js"
 import type { JobStatus, RunRequest } from "../ports.js"
 import { approvalMetadata, scriptOf } from "./approval.js"
-import { assertChangeTargets, assertTargetsFenced, checkTargets, classify, hasFence, type Classification } from "./plan.js"
+import { assertTargetsFenced, checkTargets, classify, hasFence, targetResources, type Classification } from "./plan.js"
 import { scriptStatements, sameScript, type ScriptStatementInput } from "./scripts.js"
-import { changeStatistics, changeTargets, sameTargets, type PlanTarget, targetsOf, unionTargets, type Target } from "./statistics.js"
+import { changeTargets, sameTargets, type PlanTarget, targetsOf, unionTargets, type Target } from "./statistics.js"
 import { statementTarget } from "./statement-target.js"
 
 export type CommitName = "write" | "export" | "share" | "delete" | "admin"
@@ -52,10 +52,6 @@ const WAIT_ATTEMPTS = 20
 /** A commit by its plan id, for every commit tool (`CommitInput`). */
 export type CommitInputOf = InputOf<"write">
 
-/** The plan's `PlannedStatement.targets` view of contract amendment 3, until contract/d-amendments is on master. */
-type StructuredStatement = Omit<PlannedStatement, "targets"> & { readonly targets: readonly PlanTarget[] }
-type StructuredPlan = Omit<Plan, "statement"> & { readonly statement: StructuredStatement }
-
 /**
  * Commits one plan with the tool that owns its category. The registry left the ports guarded until this handler asserts
  * the tool's own action, so the assert above everything else is enforced by the port proxy too.
@@ -73,9 +69,13 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
     const entry = actionOf(name)
     const operation = entry.operation === "input" || entry.operation === "local" ? "bigquery.jobs.insert" : entry.operation
     const resource = operationResource(context.account, operation)
+    // The plan's targets and a script's reads are asserted with the preview, so the person approves the operation and
+    // the objects in one prompt. The recheck below refuses if either differs from the plan.
+    const planReferences = scriptOf(plan)?.statements.flatMap((statement) => statement.references) ?? []
+    const resources = [resource, ...targetResources(context.account, [...plan.statement.targets, ...planReferences])]
     await context.call.assert({
       action: entry.action,
-      resources: [resource],
+      resources,
       // “Always” only where the action table allows it: never for a destructive plan.
       ...(entry.savable === false ? {} : { save: [resource] }),
       metadata: approvalMetadata(plan),
@@ -97,10 +97,9 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
       },
       "inspect",
     )
-    const statistics = changeStatistics(prepared.statistics)
+    const statistics = prepared.statistics
     const wholeTargets = targetsOf(statistics, prepared.statementType, statistics.referencedTables ?? [])
     let freshTargets: Target[]
-    let freshReferences: Target[] = []
     if (prepared.statementType === "SCRIPT") {
       const plannedScript = scriptOf(plan)
       if (plannedScript === undefined) {
@@ -134,7 +133,6 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
         throw new BigQueryError("PLAN_CHANGED", "The script's statements changed since the plan was made", "Plan again and show the user the new preview.")
       }
       freshTargets = unionTargets(wholeTargets, ...freshScript.map((statement) => statement.targets))
-      freshReferences = unionTargets(...freshScript.map((statement) => statement.references))
     } else {
       // A DDL/DCL target is not in the referenced lists, so the fence is checked on it again here: the account's
       // `datasets` option may have changed between the plan and the commit. A DML's destination comes from its own
@@ -142,14 +140,6 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
       freshTargets = changeTargets(wholeTargets, statementTarget(plan.statement.sql, prepared.statementType, prepared.project))
       checkTargets(rc.settings.fence, prepared.statementType, freshTargets, "statement")
     }
-    await assertChangeTargets({
-      call: context.call,
-      account: context.account,
-      action: entry.action,
-      via: `bigquery_${name}`,
-      targets: freshTargets,
-      ...(freshReferences.length > 0 ? { references: freshReferences } : {}),
-    })
     let classification: Classification
     try {
       classification = classify(prepared, context.options, {
@@ -315,7 +305,7 @@ function changed(plan: Plan, prepared: PreparedRead, classification: Classificat
   if (prepared.statementType !== plan.statement.statementType) {
     return `The statement now parses as ${prepared.statementType}, and the plan was made for ${plan.statement.statementType}`
   }
-  if (!sameTargets(freshTargets, (plan as unknown as StructuredPlan).statement.targets)) return "The statement's targets changed since the plan was made"
+  if (!sameTargets(freshTargets, plan.statement.targets)) return "The statement's targets changed since the plan was made"
   if (prepared.location !== plan.statement.location) return "The statement's location changed since the plan was made"
   if (classification.capEnforceable !== plan.statement.capEnforceable) {
     return "Whether the byte cap bounds the statement changed since the plan was made"

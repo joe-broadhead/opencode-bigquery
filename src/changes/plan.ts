@@ -32,7 +32,7 @@ import { sessionHash } from "../guards/session.js"
 import type { Fence } from "../guards/settings.js"
 import { boundSentence } from "./bounds.js"
 import { scriptStatements, scriptSummary, type ScriptStatementInput } from "./scripts.js"
-import { changeStatistics, changeTargets, type PlanTarget, targetSafe, targetsOf, targetsVerified, unionTargets, type Target } from "./statistics.js"
+import { changeTargets, type PlanTarget, targetSafe, targetsOf, targetsVerified, unionTargets, type Target } from "./statistics.js"
 import { statementTarget } from "./statement-target.js"
 import type { Call } from "../tool-spec.js"
 
@@ -99,7 +99,7 @@ export function classify(prepared: PreparedRead, options: Options, input: Classi
 
   if (prepared.kind === "admin") {
     if (!options.admin.enabled) {
-      throw new BigQueryError("PERMISSION_DENIED", "Admin statements are off by the plugin's admin option", "Ask the user to set admin.enabled to true.")
+      throw new BigQueryError("ADMIN_DISABLED", "Admin statements are off by the plugin's admin option", "Ask the user to set admin.enabled to true.")
     }
     if (options.admin.requireReason && input.reason === undefined) {
       throw new BigQueryError("ADMIN_REASON_REQUIRED", "An admin plan needs a reason, which the preview shows", "Plan it again with reason.")
@@ -173,7 +173,7 @@ export function checkTargets(fence: Fence | undefined, statementType: string, ta
 }
 
 /** The resources a person's rule sees for a change's targets: a table, view, routine or row policy, or a dataset's tables. */
-export function targetResources(account: string, targets: readonly Target[]): string[] {
+export function targetResources(account: string, targets: readonly PlanTarget[]): string[] {
   const out = new Set<string>()
   for (const target of targets) {
     if (!targetSafe(target)) continue
@@ -269,14 +269,6 @@ function referencedNames(prepared: PreparedRead): string[] {
   ]
 }
 
-/** A plan's script statements, kept on the plan object beside Day 0's fields until the contract carries them. */
-export interface PlannedScript {
-  readonly statements: readonly ScriptStatementInput[]
-}
-
-/** The `PlannedStatement.targets` view of contract amendment 3, until contract/d-amendments is on master. */
-type StructuredStatement = Omit<PlannedStatement, "targets"> & { readonly targets: readonly PlanTarget[] }
-
 /** `bigquery_plan`'s handler. */
 export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
   const requested = input.maxBytes !== undefined ? bytesOf(input.maxBytes) : undefined
@@ -308,7 +300,7 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
     throw error
   }
 
-  const statistics = changeStatistics(prepared.statistics)
+  const statistics = prepared.statistics
   const wholeTargets = targetsOf(statistics, prepared.statementType, statistics.referencedTables ?? [])
   let script: ScriptStatementInput[] | undefined
   let targets: Target[]
@@ -400,7 +392,7 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
     bound,
     ...(reason.length > 0 ? { reason } : {}),
   }
-  const statement = {
+  const statement: PlannedStatement = {
     sql: input.sql,
     ...(input.params !== undefined ? { params: input.params } : {}),
     project: prepared.project,
@@ -411,7 +403,7 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
     capBytes: cap.capBytes,
     capEnforceable: classification.capEnforceable,
     jobTimeoutSeconds: classification.jobTimeoutSeconds,
-  } as unknown as StructuredStatement
+  }
   const created: Plan = context.ports.plans.create({
     category: classification.category,
     account: context.account,

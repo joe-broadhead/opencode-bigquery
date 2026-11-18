@@ -67,7 +67,8 @@ describe("a commit: the plan, the assert and the run", () => {
 
     // The commit's own assert carries the plan's allowlisted preview, with “Always” for a savable action.
     const commitAssert = asserted.find((request) => request.metadata?.planId === planId)
-    expect(commitAssert).toMatchObject({ action: "bigquery.write", resources: ["default:bigquery.jobs.insert"], save: ["default:bigquery.jobs.insert"] })
+    expect(commitAssert).toMatchObject({ action: "bigquery.write", save: ["default:bigquery.jobs.insert"] })
+    expect(commitAssert!.resources).toEqual(["default:bigquery.jobs.insert", "default:table:invented-proj.sales.orders"])
     expect(JSON.stringify(commitAssert!.metadata)).not.toContain("invented-value")
 
     expect(h.ledger.entries).toHaveLength(1)
@@ -121,10 +122,12 @@ describe("a commit at the read level: nothing runs, whatever the config says", (
     expect(created.output.committable).toBe(false)
     const callsBefore = h.bigquery.calls.length
 
-    const { output } = await runTool(h, "write", { planId: String(created.output.planId) })
+    const { output, asserted } = await runTool(h, "write", { planId: String(created.output.planId) })
     expect(output).toMatchObject({ state: "refused", error: "ACCOUNT_READ_ONLY" })
     expect(h.bigquery.calls.length).toBe(callsBefore)
     expect(h.auth.refreshes.get("default")).toBeUndefined()
+    // LOW 1: the prompt cannot avoid coming before the level, so it says what the plan's level was.
+    expect(asserted.find((request) => request.metadata?.planId === created.output.planId)?.metadata?.committable).toBe(false)
 
     const again = await runTool(h, "write", { planId: String(created.output.planId) })
     expect(again.output).toMatchObject({ state: "refused", error: "PLAN_EXPIRED" })

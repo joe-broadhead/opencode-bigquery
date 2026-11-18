@@ -16,7 +16,7 @@ import type { QueryParameter } from "../domain/google.js"
 import type { Token } from "../domain/lexer-api.js"
 import { rethrowCallFailure } from "../guards/callerrors.js"
 import { createLexer, significantTokens } from "../guards/lexer.js"
-import { changeStatistics, changeTargets, referencesOf, sameTargets, targetsOf, type Target } from "./statistics.js"
+import { changeTargets, referencesOf, sameTargets, targetsOf, type Target } from "./statistics.js"
 import { statementTarget } from "./statement-target.js"
 
 /** How many statements a script may have for its preview and its per-statement targets. */
@@ -126,14 +126,13 @@ async function oneStatement(input: ScriptInput, text: string): Promise<ScriptSta
       return { text, firstLine: line, type: "unknown", targets: [], references: [], determined: false }
     }
     const type = statistics.statementType
-    const view = changeStatistics(statistics)
-    const server = targetsOf(view, type, view.referencedTables ?? [])
+    const server = targetsOf(statistics, type, statistics.referencedTables ?? [])
     return {
       text,
       firstLine: line,
       type,
       targets: changeTargets(server, statementTarget(text, type, input.project)),
-      references: referencesOf(view),
+      references: referencesOf(statistics),
       determined: true,
     }
   } catch (error) {

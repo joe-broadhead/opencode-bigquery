@@ -1,75 +1,20 @@
 /**
- * What Google's `statistics.query` says about a change, beyond Day 0's `DryRunStatistics`, and the objects the dry run
- * names as the change's targets.
+ * A change's targets: the objects BigQuery's dry run names as what the statement creates, changes or drops, and the
+ * destination its own leading keywords name when the dry run names none. The `statistics.query` fields this reads are
+ * Day 0's `DryRunStatistics` (the contract amendment for package D), documented there from Google's Job resource,
+ * `JobStatistics2` (https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatistics2, read 2026-11-18).
  *
- * The names and meanings below are Google's Job resource, `JobStatistics2`, read on 18 Nov 2026
- * (https://cloud.google.com/bigquery/docs/reference/rest/v2/Job#JobStatistics2):
- * - `ddlOperationPerformed`: “The DDL operation performed, possibly dependent on the pre-existence of the DDL target.”
- * - `ddlTargetTable`: “The DDL target table. Present only for CREATE/DROP TABLE/VIEW and DROP ALL ROW ACCESS POLICIES
- *   queries.”
- * - `ddlDestinationTable`: “The table after rename. Present only for ALTER TABLE RENAME TO query.”
- * - `ddlTargetRowAccessPolicy`: “The DDL target row access policy. Present only for CREATE/DROP ROW ACCESS POLICY
- *   queries.” Its reference has `projectId`, `datasetId`, `tableId` and `policyId`.
- * - `ddlTargetRoutine`: “[Beta] The DDL target routine. Present only for CREATE/DROP FUNCTION/PROCEDURE queries.”
- * - `ddlTargetDataset`: “The DDL target dataset. Present only for CREATE/ALTER/DROP SCHEMA(dataset) queries.”
- * - `dclTargetTable` / `dclTargetView` / `dclTargetDataset`: “Referenced table/view/dataset for DCL statement.”
- * - `numDmlAffectedRows`: “The number of rows affected by a DML statement. Present only for DML statements INSERT,
- *   UPDATE or DELETE.”
- *
- * Day 0's `DryRunStatistics` lists only the fields the read guards use, so package B's port copies those and drops
- * these. D reads them through this structural extension; the pull request's contract request asks for them in
- * `src/domain/google.ts` and for package B to carry them, with the citation above. Nothing here is guessed: a field
- * that is absent simply names no target, and the preview says what BigQuery did not say.
+ * Nothing here is guessed. A field Google fills only for some statement types is absent for the rest, and an absent
+ * field is not "no target": `changeTargets` then uses the statement's own destination, and a fence refuses a change whose
+ * target still cannot be verified rather than assume it is inside.
  */
 import type { DatasetReference, DryRunStatistics, RoutineReference, TableReference } from "../domain/google.js"
+import type { PlanTarget } from "../domain/plans.js"
 
-/** `RowAccessPolicyReference`: `projectId`, `datasetId`, `tableId`, `policyId` (Job page, above). */
-export interface RowAccessPolicyReference {
-  readonly projectId: string
-  readonly datasetId: string
-  readonly tableId: string
-  readonly policyId: string
-}
-
-/** The `statistics.query` fields a change uses that Day 0's type does not carry. */
-export interface ChangeStatistics extends DryRunStatistics {
-  readonly ddlOperationPerformed?: string
-  readonly ddlTargetTable?: TableReference
-  readonly ddlDestinationTable?: TableReference
-  readonly ddlTargetRowAccessPolicy?: RowAccessPolicyReference
-  readonly ddlTargetRoutine?: RoutineReference
-  readonly ddlTargetDataset?: DatasetReference
-  readonly dclTargetTable?: TableReference
-  readonly dclTargetView?: TableReference
-  readonly dclTargetDataset?: DatasetReference
-  readonly numDmlAffectedRows?: string
-}
-
-/** The dry-run answer as the change guards read it. The extras are absent when the port does not carry them. */
-export function changeStatistics(statistics: DryRunStatistics): ChangeStatistics {
-  return statistics as ChangeStatistics
-}
+export type { PlanTarget } from "../domain/plans.js"
 
 /** What kind of object a change's target is: the dry run's own words, not a parse of the SQL. */
 export type TargetKind = "table" | "view" | "dataset" | "routine" | "row access policy"
-
-/**
- * A plan's structured target: the exact shape of the contract amendment `PlanTarget` (contract/d-amendments), mirrored
- * here until that branch is on master, when this interface is replaced by the import and the casts in plan/commit go.
- * The review of #8 makes it blocking: a change's target is fenced and asserted against the person's rules, never just a
- * string in a preview.
- */
-export interface PlanTarget {
-  readonly kind: TargetKind
-  readonly project: string
-  readonly dataset: string
-  /** The object's id in the dataset; for a row access policy, the table it applies to. */
-  readonly name: string
-  /** A row access policy's id, when the target is one. */
-  readonly policyId?: string
-  /** The target as the preview shows it, each part validated (design §5.6). */
-  readonly label: string
-}
 
 /** One object the dry run names as the statement's target, and which field named it. */
 export interface Target extends PlanTarget {
@@ -169,7 +114,7 @@ export function changeTargets(server: readonly Target[], destination: Target | u
 }
 
 /** The objects a statement's dry run says it reads, as fence/assert objects; a property graph is left to package C. */
-export function referencesOf(statistics: ChangeStatistics): Target[] {
+export function referencesOf(statistics: DryRunStatistics): Target[] {
   const out: Target[] = []
   const add = (kind: "table" | "view" | "routine", project: string, dataset: string, name: string) =>
     out.push({ kind, project, dataset, name, label: label([project, dataset, name]), source: "referenced" })
@@ -201,7 +146,7 @@ const VIEW_TYPES = new Set(["CREATE_VIEW", "DROP_VIEW", "ALTER_VIEW"])
  * present only for DDL). An empty list means the dry run named no target, which the preview states.
  */
 export function targetsOf(
-  statistics: ChangeStatistics,
+  statistics: DryRunStatistics,
   statementType: string,
   referencedTables: readonly TableReference[] = [],
 ): Target[] {

@@ -19,7 +19,6 @@ import type { JobStatus, ResultPage } from "../../../src/ports.js"
 import { toolSpecs } from "../../../src/registry.js"
 import type { AssertRequest, Call, ToolSpec } from "../../../src/tool-spec.js"
 import { FakeBigQuery, fakePorts, readRecord, writeRecord, type FakeAccount, type FakeAuth, type FakeClock, type FakeLedger } from "../../fake/ports.js"
-import type { ChangeStatistics } from "../../../src/changes/statistics.js"
 
 export const ACCOUNT = "default"
 export const PROJECT = "invented-proj"
@@ -158,7 +157,7 @@ export function nativeTable(overrides: Partial<TableInfo> = {}): TableInfo {
   }
 }
 
-export function statistics(overrides: Partial<ChangeStatistics> = {}): ChangeStatistics {
+export function statistics(overrides: Partial<DryRunStatistics> = {}): DryRunStatistics {
   return {
     statementType: "INSERT",
     totalBytesProcessed: "1048576",
@@ -203,7 +202,7 @@ export function field(name: string, type: string, overrides: Partial<SchemaField
 // ── Scripts for the fake port ───────────────────────────────────────────
 
 export interface DryRunScript {
-  readonly statistics?: ChangeStatistics
+  readonly statistics?: DryRunStatistics
   readonly location?: string
   readonly error?: BigQueryError
 }

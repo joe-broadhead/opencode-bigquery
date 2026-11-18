@@ -240,6 +240,22 @@ describe("bigquery_plan: a change's target is checked, not assumed (review bigqu
     expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
   })
 
+  it("checks a script's later statement's reads too, not only its destination", async () => {
+    const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }] }, readOnly(), FENCED)
+    scriptDryRunsBySql(h.bigquery, (sql) =>
+      sql.includes(";")
+        ? { statistics: statistics({ statementType: "SCRIPT", referencedTables: [], totalBytesProcessed: "0" }) }
+        : sql.includes("CREATE TABLE")
+          ? { statistics: statistics({ statementType: "CREATE_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef("fresh") }) }
+          : { statistics: statistics({ statementType: "INSERT", referencedTables: [tableRef(), tableRef("people", "hr")], totalBytesProcessed: "1024" }) },
+    )
+    const { output } = await runTool(h, "plan", {
+      sql: "CREATE TABLE `invented-proj.sales.fresh` (id INT64); INSERT INTO `invented-proj.sales.orders` (id) SELECT id FROM `invented-proj.hr.people`",
+      maxBytes: "1GiB",
+    })
+    expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+  })
+
   it("asserts a DDL target as a table resource, so a person's deny rule refuses the plan", async () => {
     const h = planHarness({ dryRuns: [{ statistics: statistics({ statementType: "DROP_TABLE", referencedTables: [], totalBytesProcessed: "0", ddlTargetTable: tableRef() }) }] })
     const denied = await runTool(h, "plan", { sql: "DROP TABLE `invented-proj.sales.orders`" }, {
@@ -338,7 +354,7 @@ describe("bigquery_plan: scripts and admin", () => {
       admin: { enabled: false, requireReason: true },
     })
     const { output } = await runTool(h, "plan", { sql: "CREATE CAPACITY ...", reason: "why" })
-    expect(output).toMatchObject({ state: "refused", error: "PERMISSION_DENIED" })
+    expect(output).toMatchObject({ state: "refused", error: "ADMIN_DISABLED" })
     expect(h.ports.plans.list()).toEqual([])
   })
 })
