@@ -43,7 +43,7 @@ import { cacheOf } from "./cache.js"
 import { asCallError } from "./callerrors.js"
 import { capVerdict, type CapVerdict } from "./cap.js"
 import { capAndBudget, usdFor, type Warning } from "./cost.js"
-import { Expander, type ExpansionResult } from "./expansion.js"
+import { Expander, MAX_DEPTH, MAX_EXPANDED, type ExpansionResult } from "./expansion.js"
 import { rowGate } from "./rows.js"
 import { assertFenced, isFenced, type FenceObject } from "./fence.js"
 import { hintsFor } from "./hints.js"
@@ -205,6 +205,10 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
   }
 
   const now = () => context.ports.clock.now()
+  // The dry run's own lists are fenced before anything they name is read (review bigquery-3 round 3, LOW 6): a fenced view
+  // or routine's metadata and body are never touched. The full set is fenced again after expansion.
+  assertFenced(context.settings.fence, fenceObjects(statistics, EMPTY_EXPANSION))
+
   const expander = new Expander({
     ports: context.ports,
     account: context.account,
@@ -242,6 +246,14 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
         "NEEDS_PLAN",
         "The query defines a temporary function, and what a temporary function's body reads cannot be checked before it runs",
         "Write the expression inline, or call a persistent function (its body is checked); otherwise show the user the preview after bigquery_plan({ sql }), which needs a Read and write sign-in.",
+        { reason: "UNRESOLVED_REFERENCE" },
+      )
+    }
+    if (expansion.limit !== undefined) {
+      throw new BigQueryError(
+        "NEEDS_PLAN",
+        `The query's references were not all checked: ${expansion.limit} (at most ${MAX_EXPANDED} views and routines, ${MAX_DEPTH} deep, are expanded for one read)`,
+        "Show the user the preview after bigquery_plan({ sql }), which needs a Read and write sign-in, or split the query so each part reads fewer objects.",
         { reason: "UNRESOLVED_REFERENCE" },
       )
     }
@@ -595,6 +607,9 @@ function assertWideInformationSchema(fence: AccountSettings["fence"], tokens: re
     )
   }
 }
+
+/** An expansion that reached nothing, for fencing the dry run's own lists before expanding them. */
+const EMPTY_EXPANSION: ExpansionResult = { tables: [], views: [], routines: [], findings: [], effects: [], seenViews: new Set(), seenRoutines: new Set(), unresolved: [] }
 
 /** Every object the fence judges: the dry run's four lists, then everything expansion reached. */
 function fenceObjects(statistics: DryRunStatistics, expansion: ExpansionResult): FenceObject[] {

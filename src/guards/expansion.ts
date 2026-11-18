@@ -21,6 +21,10 @@
  * (an authorised view or routine over tables the caller cannot see), answers with a statement type other than
  * `SELECT`, or is legacy SQL is **unresolved**, and the read goes to a plan: nothing is assumed.
  *
+ * Expansion is bounded: at most `MAX_EXPANDED` (32) views and routines, `MAX_DEPTH` (3) deep, and `MAX_LOOKUPS` (256)
+ * metadata reads per read, and a referenced list of `MAX_LIST` (50) or more entries is taken as possibly cut. Past any of
+ * them the read is unresolved and goes to a plan; nothing more is requested.
+ *
  * The whole resolution is cached 60 s per account (review R2-L1): a view redefined inside the window is caught after the
  * run by comparing the finished job's referenced lists with what expansion saw (`CLASSIFICATION_DRIFT`).
  */
@@ -36,6 +40,26 @@ import { tableFacts, type TableFacts } from "./tables.js"
 
 /** How deep a view or routine chain may go (design §5.1 step 4). */
 export const MAX_DEPTH = 3
+
+/**
+ * How many views and routines one read may expand (review bigquery-3 round 3, LOW 1). Each costs a `tables.get` or
+ * `routines.get` and, for a view or SQL routine, a body dry run; past this the read is unresolved and goes to a plan,
+ * so no query can set off an unbounded series of requests.
+ */
+export const MAX_EXPANDED = 32
+
+/** How many objects (tables, views and routines) one read may look up with `tables.get` or `routines.get`. */
+export const MAX_LOOKUPS = 256
+
+/**
+ * A referenced list this long may be incomplete (review bigquery-3 round 3, LOW 2). Google's Job resource states a
+ * 50-entry truncation only for `referencedPropertyGraphs`; the guards depend on every list being complete, so any list
+ * of 50 or more is treated as possibly cut, and the read is unresolved.
+ */
+export const MAX_LIST = 50
+
+/** The unresolved entry a read records when expansion stopped at a limit; read.ts words the refusal from it. */
+export const EXPANSION_LIMIT = "the expansion limit"
 
 export interface ExpansionDeps {
   readonly ports: Ports
@@ -68,6 +92,8 @@ export interface ExpansionResult {
   readonly seenRoutines: ReadonlySet<string>
   /** Validated names of references that could not be resolved; any of them sends the read to a plan. */
   readonly unresolved: readonly string[]
+  /** Why expansion stopped early, when it hit a limit; `unresolved` then holds `EXPANSION_LIMIT` too. */
+  readonly limit?: string
 }
 
 const keyOf = (ref: TableReference) => `${ref.projectId}.${ref.datasetId}.${ref.tableId}`
@@ -98,6 +124,9 @@ export class Expander {
   private readonly unresolved = new Set<string>()
   private readonly seenViews = new Set<string>()
   private readonly seenRoutines = new Set<string>()
+  private expanded = 0
+  private lookups = 0
+  private limit: string | undefined
 
   constructor(private readonly deps: ExpansionDeps) {
     this.lexer = deps.lexer ?? createLexer()
@@ -110,14 +139,14 @@ export class Expander {
     this.findings.length = 0
     this.tableQueue.length = 0
     this.routineQueue.length = 0
+    this.expanded = 0
+    this.lookups = 0
+    this.limit = undefined
 
-    for (const ref of input.statistics.referencedTables ?? []) this.tableQueue.push({ ref, depth: 1 })
-    for (const ref of input.statistics.referencedLogicalViews ?? []) this.tableQueue.push({ ref, depth: 1 })
-    for (const ref of input.statistics.referencedRoutines ?? []) this.routineQueue.push({ ref, depth: 1 })
-    this.graphs(input.statistics)
+    this.enqueueAnswer(input.statistics, 1)
 
     // One queue at a time, either kind: a routine's body queues tables, and a view's body queues routines.
-    while (this.tableQueue.length > 0 || this.routineQueue.length > 0) {
+    while ((this.tableQueue.length > 0 || this.routineQueue.length > 0) && this.limit === undefined) {
       const table = this.tableQueue.shift()
       if (table) {
         await this.resolveTable(table)
@@ -135,11 +164,41 @@ export class Expander {
       seenViews: this.seenViews,
       seenRoutines: this.seenRoutines,
       unresolved: [...this.unresolved],
+      ...(this.limit !== undefined ? { limit: this.limit } : {}),
     }
+  }
+
+  /** Stops expansion at a limit: the read is unresolved, and nothing more is requested. */
+  private stop(why: string): void {
+    this.limit ??= why
+    this.unresolved.add(EXPANSION_LIMIT)
+    this.tableQueue.length = 0
+    this.routineQueue.length = 0
+  }
+
+  /** Counts one `tables.get` or `routines.get`; false (and stopped) past `MAX_LOOKUPS`. */
+  private lookup(): boolean {
+    this.lookups += 1
+    if (this.lookups <= MAX_LOOKUPS) return true
+    this.stop(`it reaches more than ${MAX_LOOKUPS} tables, views and routines`)
+    return false
+  }
+
+  /** Counts one view or routine expanded; false (and stopped) past `MAX_EXPANDED`. */
+  private expandOne(): boolean {
+    this.expanded += 1
+    if (this.expanded <= MAX_EXPANDED) return true
+    this.stop(`it reaches more than ${MAX_EXPANDED} views and routines`)
+    return false
   }
 
   /** What a body's own dry run names, queued one level deeper. */
   private enqueueAnswer(statistics: DryRunStatistics, depth: number): void {
+    const lists = [statistics.referencedTables, statistics.referencedLogicalViews, statistics.referencedRoutines, statistics.referencedPropertyGraphs]
+    if (lists.some((list) => (list?.length ?? 0) >= MAX_LIST)) {
+      this.stop(`a dry run named ${MAX_LIST} or more objects in one list, which may be incomplete`)
+      return
+    }
     for (const table of statistics.referencedTables ?? []) this.tableQueue.push({ ref: table, depth })
     for (const view of statistics.referencedLogicalViews ?? []) this.tableQueue.push({ ref: view, depth })
     for (const routine of statistics.referencedRoutines ?? []) this.routineQueue.push({ ref: routine, depth })
@@ -186,7 +245,8 @@ export class Expander {
     const { ref, depth } = item
     if (isInformationSchema(ref)) return
     const key = keyOf(ref)
-    if (this.tables.has(key) || this.views.has(key)) return
+    if (this.tables.has(key) || this.views.has(key) || this.seenViews.has(key)) return
+    if (!this.lookup()) return
     let info: TableInfo
     try {
       info = await this.table(ref)
@@ -201,6 +261,7 @@ export class Expander {
       return
     }
     this.seenViews.add(key)
+    if (!this.expandOne()) return
     if (depth > MAX_DEPTH) {
       this.unresolved.add(key)
       return
@@ -234,6 +295,7 @@ export class Expander {
     const { ref, depth } = item
     const key = routineKey(ref)
     if (this.seenRoutines.has(key)) return
+    if (!this.lookup() || !this.expandOne()) return
     let routine: RoutineInfo
     try {
       routine = await this.routine(ref)

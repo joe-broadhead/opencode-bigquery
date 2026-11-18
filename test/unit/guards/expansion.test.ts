@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 import { BigQueryError } from "../../../src/domain/errors.js"
 import type { DryRunStatistics, RoutineInfo, TableInfo } from "../../../src/domain/google.js"
 import { TtlCache } from "../../../src/guards/cache.js"
-import { Expander } from "../../../src/guards/expansion.js"
+import { EXPANSION_LIMIT, Expander, MAX_EXPANDED, MAX_LIST, MAX_LOOKUPS } from "../../../src/guards/expansion.js"
 import { fakePorts } from "../../fake/ports.js"
 import { ACCOUNT, DATASET, LOCATION, PROJECT, callsOf, harness, jobStatus, nativeTable, one, resultPage, routine, runTool, scriptNativeRead, statistics, tableRef } from "../reads/support.js"
 import { needsPlan } from "../reads/expect.js"
@@ -320,5 +320,96 @@ describe("expansion (§5.1 step 4)", () => {
     expect([...result.seenViews]).toEqual([path("v")])
     expect([...result.seenRoutines]).toEqual([path("fn")])
     expect(one(result.routines).language).toBe("SQL")
+  })
+})
+
+describe("expansion is bounded (review bigquery-3 round 3, LOWs 1, 2 and 6)", () => {
+  const views = (count: number, body: (index: number) => string) => {
+    const tables: Record<string, TableInfo> = {}
+    for (let index = 0; index < count; index += 1) tables[path(`v${index}`)] = view(`v${index}`, body(index))
+    return tables
+  }
+
+  it(`expands at most ${MAX_EXPANDED} views and routines, then stops asking and is unresolved`, async () => {
+    const count = MAX_EXPANDED + 8
+    const world: World = { tables: views(count, (index) => `SELECT ${index}`) }
+    const { expand, ports } = expander(world)
+    const result = await expand.expand({ statistics: statistics({ referencedTables: undefined, referencedLogicalViews: Array.from({ length: count }, (_, index) => refOf(`v${index}`)) }) })
+    expect(result.unresolved).toContain(EXPANSION_LIMIT)
+    expect(result.limit).toContain(`more than ${MAX_EXPANDED} views and routines`)
+    expect(callsOf(ports.bigquery, "dryRun").length).toBeLessThanOrEqual(MAX_EXPANDED)
+    expect(callsOf(ports.bigquery, "getTable").length).toBeLessThanOrEqual(MAX_EXPANDED + 1)
+  })
+
+  it("bounds a fan-out of views over views, however wide each level is", async () => {
+    // v_root → 40 views, each → 40 more: without a bound, 1,641 lookups and dry runs.
+    const tables: Record<string, TableInfo> = { [path("root")]: view("root", "SELECT root") }
+    const bodies: Record<string, DryRunStatistics> = { "SELECT root": { statementType: "SELECT", referencedLogicalViews: Array.from({ length: 40 }, (_, index) => refOf(`a${index}`)) } }
+    for (let a = 0; a < 40; a += 1) {
+      tables[path(`a${a}`)] = view(`a${a}`, `SELECT a${a}`)
+      bodies[`SELECT a${a}`] = { statementType: "SELECT", referencedLogicalViews: Array.from({ length: 40 }, (_, index) => refOf(`b${a}_${index}`)) }
+      for (let b = 0; b < 40; b += 1) tables[path(`b${a}_${b}`)] = view(`b${a}_${b}`, "SELECT 1")
+    }
+    const { expand, ports } = expander({ tables, bodies })
+    const result = await expand.expand({ statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("root")] }) })
+    expect(result.unresolved).toContain(EXPANSION_LIMIT)
+    expect(callsOf(ports.bigquery, "dryRun").length).toBeLessThanOrEqual(MAX_EXPANDED)
+  })
+
+  it(`reads at most ${MAX_LOOKUPS} objects' metadata, even when each body names fewer than ${MAX_LIST} tables`, async () => {
+    const tables: Record<string, TableInfo> = {}
+    const bodies: Record<string, DryRunStatistics> = {}
+    for (let v = 0; v < 10; v += 1) {
+      tables[path(`v${v}`)] = view(`v${v}`, `SELECT v${v}`)
+      bodies[`SELECT v${v}`] = { statementType: "SELECT", referencedTables: Array.from({ length: MAX_LIST - 1 }, (_, index) => refOf(`t${v}_${index}`)) }
+      for (let t = 0; t < MAX_LIST - 1; t += 1) tables[path(`t${v}_${t}`)] = nativeTable({ tableReference: refOf(`t${v}_${t}`) })
+    }
+    const { expand, ports } = expander({ tables, bodies })
+    const result = await expand.expand({ statistics: statistics({ referencedTables: undefined, referencedLogicalViews: Array.from({ length: 10 }, (_, index) => refOf(`v${index}`)) }) })
+    expect(result.limit).toContain(`more than ${MAX_LOOKUPS}`)
+    expect(callsOf(ports.bigquery, "getTable").length).toBeLessThanOrEqual(MAX_LOOKUPS)
+  })
+
+  it(`takes a referenced list of ${MAX_LIST} or more as possibly cut, at the top and in a body; ${MAX_LIST - 1} is complete`, async () => {
+    const many = (count: number) => Array.from({ length: count }, (_, index) => refOf(`t${index}`))
+    const tables: Record<string, TableInfo> = {}
+    for (let index = 0; index < MAX_LIST; index += 1) tables[path(`t${index}`)] = nativeTable({ tableReference: refOf(`t${index}`) })
+
+    const top = await expander({ tables }).expand.expand({ statistics: statistics({ referencedTables: many(MAX_LIST) }) })
+    expect(top.unresolved).toEqual([EXPANSION_LIMIT])
+    expect(top.limit).toContain(`${MAX_LIST} or more`)
+
+    const fine = await expander({ tables }).expand.expand({ statistics: statistics({ referencedTables: many(MAX_LIST - 1) }) })
+    expect(fine.unresolved).toEqual([])
+
+    const inBody = await expander({ tables: { ...tables, [path("v")]: view("v", "SELECT v") }, bodies: { "SELECT v": { statementType: "SELECT", referencedTables: many(MAX_LIST) } } }).expand.expand({
+      statistics: statistics({ referencedTables: undefined, referencedLogicalViews: [refOf("v")] }),
+    })
+    expect(inBody.unresolved).toContain(EXPANSION_LIMIT)
+  })
+
+  it("answers a read past a limit with NEEDS_PLAN, naming the limit, and runs nothing", async () => {
+    const h = harness()
+    const count = MAX_EXPANDED + 1
+    h.bigquery.on("dryRun", async (request: { defaultDataset?: unknown }) =>
+      request.defaultDataset === undefined
+        ? { location: LOCATION, statistics: statistics({ referencedTables: [], referencedLogicalViews: Array.from({ length: count }, (_, index) => refOf(`v${index}`)) }) }
+        : { location: LOCATION, statistics: { statementType: "SELECT", totalBytesProcessed: "0" } },
+    )
+    h.bigquery.on("getTable", async (_account: string, ref: { tableId: string }) => view(ref.tableId, "SELECT 1"))
+    const { output } = await runTool(h, "query", { sql: "SELECT * FROM `invented-proj.sales.v0`" })
+    expect(needsPlan(output)).toBe("UNRESOLVED_REFERENCE")
+    expect(String(output.message)).toContain(`at most ${MAX_EXPANDED} views and routines`)
+    expect(callsOf(h.bigquery, "run")).toEqual([])
+  })
+
+  it("fences the dry run's own lists before reading anything they name (LOW 6)", async () => {
+    const h = harness(undefined, { accounts: { default: { billingProject: PROJECT, location: LOCATION, datasets: { allow: [`${PROJECT}.${DATASET}`] } } } })
+    h.bigquery.on("dryRun", async () => ({ location: LOCATION, statistics: statistics({ referencedTables: [], referencedLogicalViews: [tableRef("v", "private")], referencedRoutines: [{ projectId: PROJECT, datasetId: "private", routineId: "fn" }] }) }))
+    const { output } = await runTool(h, "query", { sql: "SELECT * FROM `invented-proj.private.v`" })
+    expect(output).toMatchObject({ state: "refused", error: "DATASET_FENCED" })
+    expect(callsOf(h.bigquery, "getTable")).toEqual([])
+    expect(callsOf(h.bigquery, "getRoutine")).toEqual([])
+    expect(callsOf(h.bigquery, "dryRun")).toHaveLength(1)
   })
 })
