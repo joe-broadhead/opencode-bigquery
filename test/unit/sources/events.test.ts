@@ -223,24 +223,76 @@ describe("bigquery.jobs", () => {
     expect(states.slice(0, 3)).toEqual(["pending", "running", "done"])
   })
 
-  test("a location Google reports unreachable fails the read with UNAVAILABLE, and the same cursor reads it all later", async () => {
+  test("a location unreachable at a read's start is held: the others are delivered now, it is delivered when back, no gap", async () => {
     const target = harness()
     const jobs: SimJob[] = [
       { jobId: "us", created: NOW - 50 * MIN, ended: NOW - 40 * MIN, location: "US" },
       { jobId: "eu", created: NOW - 50 * MIN, ended: NOW - 40 * MIN, location: "EU" },
+      { jobId: "eu-later", created: NOW + 10 * MIN, ended: NOW + 20 * MIN, location: "EU" },
     ]
     let down = true
     const sim = new Sim(target, jobs, { unreachable: () => (down ? ["EU"] : []) })
+    const reading = newReading()
+    target.clock.time = NOW
+    await readOnce(sim, target, reading, { since: NOW - HOUR })
+    expect([...reading.delivered.keys()]).toEqual(["us"])
+    target.clock.time = NOW + HOUR
+    await readOnce(sim, target, reading, {})
+    expect([...reading.delivered.keys()]).toEqual(["us"])
+    down = false
+    target.clock.time = NOW + 2 * HOUR
+    await readOnce(sim, target, reading, {})
+    expect([...reading.delivered.keys()].sort()).toEqual(["eu", "eu-later", "us"])
+    expect([...reading.delivered.values()]).toEqual([1, 1, 1])
+    expect(reading.gaps).toEqual([])
+    expect(reading.errors).toEqual([])
+  })
+
+  test("a location that goes dark in the middle of a read is held from where the walk was: nothing repeated or lost", async () => {
+    const target = harness()
+    const jobs: SimJob[] = Array.from({ length: 40 }, (_, index) => ({
+      jobId: `j${index}`,
+      created: NOW - 3 * HOUR + index * MIN,
+      ended: NOW - HOUR + index * 30_000,
+      location: index % 2 === 0 ? "US" : "EU",
+    }))
+    let calls = 0
+    // EU is reachable for the read's start and its first walk calls, then dark for the next ten calls.
+    const sim = new Sim(target, jobs, { unreachable: () => (calls >= 4 && calls < 14 ? ["EU"] : []) })
+    target.bigquery.on("listJobs", async (input) => {
+      const page = sim.listJobs(input)
+      calls += 1
+      return page
+    })
+    const reading = newReading()
+    target.clock.time = NOW
+    await readOnce(sim, target, reading, { since: NOW - 4 * HOUR, limit: 3 })
+    expect(reading.errors).toEqual([])
+    target.clock.time = NOW + HOUR
+    await readOnce(sim, target, reading, { limit: 3 })
+    for (const hours of [2, 3]) {
+      target.clock.time = NOW + hours * HOUR
+      await readOnce(sim, target, reading, { limit: 3 })
+    }
+    expect(calls).toBeGreaterThan(14)
+    expect([...reading.delivered.keys()].sort()).toEqual(jobs.map((job) => job.jobId).sort())
+    expect([...reading.delivered.values()].every((count) => count === 1)).toBe(true)
+    expect(reading.gaps).toEqual([])
+    expect(reading.errors).toEqual([])
+  })
+
+  test("a location Google names in a way no job can match fails the read with UNAVAILABLE, and the same cursor reads later", async () => {
+    const target = harness()
+    let odd = true
+    const sim = new Sim(target, [{ jobId: "us", created: NOW - 50 * MIN, ended: NOW - 40 * MIN, location: "US" }], { unreachable: () => (odd ? ["unknown"] : []) })
     target.clock.time = NOW
     const failed = await page(target, { since: iso(NOW - HOUR) })
     expect(failed["error"]).toBe("UNAVAILABLE")
-    expect(String(failed["message"])).toContain("the location EU unreachable")
     expect(failed["retryAfterSec"]).toBe(300)
-    down = false
+    odd = false
     const reading = newReading()
     await readOnce(sim, target, reading, { since: NOW - HOUR })
-    expect([...reading.delivered.keys()].sort()).toEqual(["eu", "us"])
-    expect(reading.gaps).toEqual([])
+    expect([...reading.delivered.keys()]).toEqual(["us"])
   })
 
   test("a script's call throws the contract's error, and the model's call answers the envelope", async () => {

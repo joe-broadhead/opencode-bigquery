@@ -15,11 +15,10 @@
  * - A read fixes a **cutoff** `c` and delivers exactly the jobs that ended in `(e, c]`, then sets `e = c`. Each job ends
  *   once, so it falls in exactly one read's range: nothing is delivered twice, whatever the paging, ties or timing, and
  *   no list of ids is kept.
- * - `c` is Google's now, less a 2-minute settle margin. Google's now comes from Google's own clock: the HTTP `Date` of
- *   its listing answers and the newest creation or end time they hold, less the host time that has passed since the
- *   read started, or the estimate carried from the last read plus the host time since. Only the host clock's rate is
- *   trusted, never its reading, so a host clock ahead of Google's cannot move `c` past a job not yet listed. The
- *   margin covers the lag between a job's end and its listing as DONE.
+ * - `c` is Google's now, less a 2-minute settle margin. Google's now is the HTTP `Date` of the read's first answer
+ *   (or, without one, the newest creation or end time its start's answers hold): Google's own clock, never the host's,
+ *   so no step of the host clock, forward or back, by seconds or by a day, can move `c` past a job not yet listed. The
+ *   margin covers the start's own calls and the lag between a job's end and its listing as DONE.
  * - To find every job ending in `(e, c]` the read lists the DONE jobs created in `[f, c]`. The next floor sits below
  *   every job still queued or running when this read started (listed PENDING, then RUNNING: a job only moves forward,
  *   so one moving between the two calls is in one of them) and below every job seen finished after `c`, and never above
@@ -41,10 +40,14 @@
  * - *a gap once per read*: a gap is answered on the page that finds it, and `g` keeps every later page of the same read
  *   from answering another. Every gap's `since` is the read's `e`, so one gap covers whatever that read could lose.
  *
- * **Unreachable locations.** A listing with `unreachable[]` is incomplete for those locations. The read fails with
- * `UNAVAILABLE` and the consumer's cursor waits, which loses nothing. After 7 days of waiting the source goes on
- * without the location and answers a `window-truncated` gap on every read while it stays unreachable; the floor stays
- * where it was (up to a day back), so a job still running there when it comes back is listed once it finishes.
+ * **Unreachable locations.** `jobs.list` walks every location and names the ones it skipped. A location skipped in
+ * any project at a read's start is **held** in every project of the scope: the cursor keeps its frontier and floor from then (`d`, at most four), the read
+ * delivers the other locations, and none of the held one's jobs. When Google reaches it again, that read walks it from
+ * its own floor and delivers what ended after its own frontier, so an outage of any length loses nothing and answers no
+ * gap; only six months' retention can, and then the read says `expired`. A location that goes dark in the middle of a
+ * read is held from that point: the cursor also keeps that read's cutoff and the walk's position, so the catch-up skips
+ * exactly the jobs the read had already delivered. More than four held at once, or a cursor that cannot hold them, fails
+ * the page with `UNAVAILABLE`, and the cursor waits.
  *
  * **Expiry.** Job history is kept six months. A cursor whose floor is older answers `gap: { reason: "expired" }` once,
  * with the floor raised to what Google still keeps, and reads on. `noExpiry` is false.
@@ -62,7 +65,7 @@ import type { Options } from "../options.js"
 import type { JobStatus, Ports } from "../ports.js"
 import type { Call } from "../tool-spec.js"
 import { assertSourceReads, JOBS_SOURCE } from "./assert.js"
-import { bindingOf, decodeState, encodeState, hashOf, iso, type Binding, type CursorState } from "./cursor.js"
+import { bindingOf, decodeState, encodeState, hashOf, iso, type Binding, type CursorState, type Dark } from "./cursor.js"
 import { sourceError } from "./errors.js"
 
 const MINUTE = 60_000
@@ -75,8 +78,8 @@ export const SETTLE_MS = 2 * MINUTE
 export const LOOKBACK_MS = 24 * HOUR
 /** Six months of job history (jobs.list: "available for a six month period after creation"), counted short. */
 export const RETENTION_MS = 180 * DAY
-/** How long an unreachable location makes the source wait (`UNAVAILABLE`) before it goes on without it. */
-export const OUTAGE_HOLD_MS = 7 * DAY
+/** At most this many (project, location) pairs are held for an outage at once; more fails the read (`UNAVAILABLE`). */
+export const MAX_DARK = 4
 /** At most this many walk calls per `events_list` call. */
 export const LIST_CALLS = 20
 /** At most this many calls list one project's queued or running jobs when a read starts. */
@@ -129,6 +132,17 @@ function itemOf(status: JobStatus, project: string): Item | undefined {
   }
 }
 
+/**
+ * Whether a held location's job was delivered by the read that saw it go dark: it ended by that read's cutoff and the
+ * walk had passed it (an earlier project, or a later creation, or the same creation and an id hash at most the one the
+ * walk stood on).
+ */
+function deliveredBefore(held: Dark, index: number, item: Item): boolean {
+  if (held.length !== 8 || item.end === undefined || item.end > held[4]) return false
+  const [, , , , , at, creation, hash] = held
+  return index < at || (index === at && creation >= 0 && (item.creation > creation || (item.creation === creation && item.hash <= hash)))
+}
+
 /** Walk order: newest created first, then by id hash, then by id. */
 const walkOrder = (left: Item, right: Item): number => right.creation - left.creation || (left.hash < right.hash ? -1 : left.hash > right.hash ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
 
@@ -144,16 +158,19 @@ class Listing {
   done = false
   /** The lowest creation time fetched: every millisecond above it is complete. */
   lowest: number | undefined
-  /** The newest Google timestamp fetched. */
+  /** The newest job timestamp fetched (creation or end), and the HTTP Date of the first answer. */
   newest: number | undefined
+  firstDate: number | undefined
+  private calls = 0
 
   constructor(
     private readonly deps: SourceDeps,
+    private readonly index: number,
     private readonly project: string,
     private readonly state: "done" | "pending" | "running",
     private readonly min: number,
     upper: number | undefined,
-    private readonly onUnreachable: (locations: readonly string[]) => void,
+    private readonly onUnreachable: (index: number, locations: readonly string[]) => void,
   ) {
     this.upper = upper
   }
@@ -171,8 +188,9 @@ class Listing {
       },
       this.deps.call.signal,
     )
-    if (page.unreachable !== undefined && page.unreachable.length > 0) this.onUnreachable(page.unreachable)
-    if (page.serverTime !== undefined) this.newest = this.newest === undefined ? page.serverTime : Math.max(this.newest, page.serverTime)
+    if (this.calls === 0 && page.serverTime !== undefined) this.firstDate = page.serverTime
+    this.calls += 1
+    if (page.unreachable !== undefined && page.unreachable.length > 0) this.onUnreachable(this.index, page.unreachable)
     const fresh: Item[] = []
     let low: number | undefined
     let high: number | undefined
@@ -290,50 +308,84 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
   const owner = await ownerOf(deps)
 
   let gap: Gap | undefined
-  const answerGap = (reason: Gap["reason"]) => {
+  const answerGap = (reason: Gap["reason"], since = state.e) => {
     if (state.g === 1) return
-    gap = { reason, since: iso(state.e) }
+    gap = { reason, since: iso(since) }
     state.g = 1
   }
 
-  // History older than six months may be gone. A read in progress that old starts again from its frontier.
-  const retained = hostNow - RETENTION_MS
-  if (state.f < retained) {
-    const answered = state.g === 1
-    state = { e: state.e, f: retained, ...(state.t !== undefined ? { t: state.t, u: state.u! } : {}), ...(state.o === 1 ? { o: 1 as const } : {}), ...(answered ? { g: 1 as const } : {}) }
-    if (!answered) {
-      gap = { reason: "expired", since: iso(state.e) }
-      state.g = 1
-    }
+  // A read in progress whose floor is past what Google keeps starts again from its frontier (the start answers it).
+  if (state.c !== undefined && state.f < hostNow - RETENTION_MS) {
+    state = { e: state.e, f: state.f, ...(state.d !== undefined ? { d: state.d } : {}), ...(state.g === 1 ? { g: 1 as const } : {}) }
   }
 
-  // Locations Google skipped. The cursor waits for them (UNAVAILABLE) until the hold has passed.
-  let unreachable: readonly string[] = []
-  const noteUnreachable = (locations: readonly string[]) => {
-    unreachable = [...unreachable, ...locations]
-  }
-  const settleOutage = () => {
-    if (unreachable.length === 0) return
-    if (state.o !== 1 && hostNow - state.e <= OUTAGE_HOLD_MS) {
-      throw sourceError(
-        "UNAVAILABLE",
-        `BigQuery reported ${locationWords(unreachable)} unreachable, so the list of jobs is incomplete and nothing was read.`,
-        "Call the source again later with the same cursor; nothing is lost while it waits.",
-        { retryAfterSec: 300 },
-      )
+  // Locations Google skipped. At a read's start one is held (its own frontier and floor in the
+  // cursor) and the read goes on without it; one that goes dark mid-read is held from where the walk was.
+  const dark: Dark[] = state.d !== undefined ? state.d.map((entry) => [...entry] as Dark) : []
+  const entryOf = (location: string) => dark.find((entry) => entry[0] === location.toLowerCase())
+  const floorOf = () => Math.min(state.f, ...dark.map((entry) => entry[2]))
+  const startDark = new Set<string>()
+  let starting = state.c === undefined
+  const unavailable = (locations: readonly string[], why: string) =>
+    sourceError("UNAVAILABLE", `BigQuery reported ${locationWords(locations)} unreachable ${why}, so nothing was read.`, "Call the source again later with the same cursor; nothing is lost while it waits.", { retryAfterSec: 300 })
+  const noteUnreachable = (_index: number, locations: readonly string[]) => {
+    for (const raw of locations) {
+      const location = raw.toLowerCase()
+      if (location === "unknown" || !/^[a-z0-9-]{1,32}$/.test(location)) throw unavailable([raw], "under a name this source cannot match to its jobs")
+      if (starting) startDark.add(location)
+      else {
+        // Dark from here on in this read: hold it with this read's frontier and floor, and where the walk was, so its
+        // catch-up later skips exactly the jobs this read has already delivered.
+        const entry = entryOf(location)
+        const at: [number, number, number, string] = [state.c!, state.i!, state.p ?? -1, state.h ?? ""]
+        if (entry === undefined) {
+          if (dark.length >= MAX_DARK) throw unavailable([...dark.map((held) => held[0]), raw], `in more than ${MAX_DARK} locations at once`)
+          dark.push([location, state.e, state.f, 0, ...at])
+          state.d = dark
+        } else if (entry[3] === 1) {
+          if (entry.length === 8) throw unavailable([raw], "again while it was being caught up")
+          entry[3] = 0
+          entry.push(...at)
+        }
+      }
     }
-    state.o = 1
-    answerGap("window-truncated")
   }
 
   let first: { readonly listing: Listing; readonly items: Item[] } | undefined
-  if (state.c === undefined) {
-    first = await startRead(deps, projects, state, hostNow, noteUnreachable, answerGap)
-    // A read whose start reaches every location is out of any outage; one that does not keeps the outage's state.
-    if (unreachable.length === 0) delete state.o
+  if (starting) {
+    const started = await startRead(deps, projects, state, floorOf, noteUnreachable)
+    first = started
+    starting = false
+    // Held locations: a new one keeps this read's frontier and floor; one Google reaches again is walked from its own.
+    for (const location of startDark) if (entryOf(location) === undefined) dark.push([location, state.e, state.f, 0])
+    for (const entry of dark) entry[3] = startDark.has(entry[0]) ? 0 : 1
+    if (dark.length > MAX_DARK) throw unavailable(dark.map((entry) => entry[0]), `in more than ${MAX_DARK} locations at once`)
+    const googleNow = started.googleNow
+    state.c = googleNow === undefined ? state.e : Math.max(state.e, googleNow - SETTLE_MS)
+    // The next floor: below every job still queued or running (tracked for a day after its creation), never above
+    // what Google has shown less the margin. With no Google time at all the floors stay where they are.
+    let next = googleNow === undefined ? Math.min(state.f, ...dark.filter((entry) => entry[3] === 1).map((entry) => entry[2])) : googleNow - SETTLE_MS
+    let untracked = false
+    if (!started.complete) next = Math.min(next, state.f)
+    for (const creation of started.unfinished) {
+      if (creation < state.c - LOOKBACK_MS) untracked = true
+      else next = Math.min(next, creation)
+    }
+    if (untracked) answerGap("window-truncated")
+    // History older than six months may be gone: a floor older than that, the read's or a held location's, says so.
+    const retained = (googleNow ?? hostNow) - RETENTION_MS
+    const expired = [...(state.f < retained ? [state.e] : []), ...dark.filter((entry) => entry[2] < retained).map((entry) => entry[1])]
+    if (expired.length > 0) answerGap("expired", Math.min(...expired))
+    for (const entry of dark) entry[2] = Math.max(entry[2], retained)
+    state.f = Math.max(state.f, retained)
+    state.n = Math.max(next, retained)
+    state.i = 0
+    delete state.p
+    delete state.h
   }
+  if (dark.length > 0) state.d = dark
+  else delete state.d
   if (state.c === undefined || state.n === undefined || state.i === undefined) throw new Error("bigquery.jobs: a read started without its cutoff")
-  settleOutage()
 
   const cutoff = state.c
   const frontier = state.e
@@ -369,7 +421,7 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
   for (let index = state.i; index < projects.length; index++) {
     const project = projects[index]!
     const resumeAt = index === state.i && state.p !== undefined ? { p: state.p, h: state.h! } : undefined
-    const listing = first !== undefined && index === 0 ? first.listing : new Listing(deps, project, "done", state.f, resumeAt?.p ?? cutoff, noteUnreachable)
+    const listing = first !== undefined && index === 0 ? first.listing : new Listing(deps, index, project, "done", floorOf(), resumeAt?.p ?? cutoff, noteUnreachable)
     let buffer: Item[] = first !== undefined && index === 0 ? first.items : []
     let fetched = first !== undefined && index === 0
     for (;;) {
@@ -377,7 +429,6 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
         if (calls >= LIST_CALLS) return pageOf(deps, owner, scope, collected, refused, state, true, gap, binding)
         buffer = [...buffer, ...(await listing.fetch())]
         calls += 1
-        settleOutage()
       }
       fetched = false
       const complete = listing.done ? buffer : buffer.filter((item) => listing.lowest !== undefined && item.creation > listing.lowest)
@@ -385,7 +436,13 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
       complete.sort(walkOrder)
       for (const item of complete) {
         if (resumeAt !== undefined && item.creation === resumeAt.p && item.hash <= resumeAt.h) continue
-        if (item.creation <= cutoff && item.end !== undefined && item.end > frontier) {
+        // A held location's jobs wait for it; one Google reaches again is delivered from its own frontier.
+        // A location still dark at this read's start is delivered when it is back, so none of its jobs is taken now.
+        const held = entryOf(item.location)
+        const waiting = held !== undefined && held[3] !== 1
+        const low = held === undefined ? frontier : held[1]
+        const already = held !== undefined && item.end !== undefined && deliveredBefore(held, index, item)
+        if (!waiting && !already && item.creation <= cutoff && item.end !== undefined && item.end > low) {
           if (item.end <= cutoff) {
             if (!offer(item)) return pageOf(deps, owner, scope, collected, refused, state, true, gap, binding)
           } else {
@@ -405,84 +462,57 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
     delete state.h
   }
 
-  // The read is complete: everything that ended in (e, c] was offered, so the frontier moves to c. While a location is
-  // down its running jobs are not listed, so the floor stays (up to a day back) for them to be found once it is back.
-  const next = Math.min(state.n, cutoff)
+  // The read is complete: everything that ended in (e, c] was offered, and a returning location's (its e, c], so the
+  // frontier moves to c, returning locations are no longer held, and held ones keep their own frontier and floor.
+  const still = dark.filter((entry) => entry[3] !== 1)
   const done: CursorState = {
     e: cutoff,
-    f: Math.max(state.o === 1 ? Math.min(next, Math.max(state.f, cutoff - LOOKBACK_MS)) : next, state.f),
-    ...(state.t !== undefined ? { t: state.t, u: state.u! } : {}),
-    ...(state.o === 1 ? { o: 1 as const } : {}),
+    f: Math.min(state.n, cutoff),
+    ...(still.length > 0 ? { d: still } : {}),
   }
   return pageOf(deps, owner, scope, collected, refused, done, false, gap, binding)
 }
 
 /**
- * The start of a read: the jobs still queued or running, Google's now from Google's own timestamps, the cutoff, the
- * next floor, and the first page of the walk (kept for the walk, so it costs no extra call).
+ * The start of a read: the jobs still queued or running, Google's now from Google's own answers, and the first page of
+ * the walk (kept for the walk, so it costs no extra call).
+ *
+ * Google's now is the HTTP `Date` of the read's first answer, or, if it carried none, the newest creation or end time
+ * the start's answers hold: never the host clock, so no step of the host's clock, forward or back, can move a cutoff
+ * past a job Google has not listed yet. The first answer is the one the floor is computed from, so a job created after
+ * it is created after the cutoff (the margin covers the start's own calls and listing lag).
  */
 async function startRead(
   deps: SourceDeps,
   projects: readonly string[],
   state: CursorState,
-  hostNow: number,
-  noteUnreachable: (locations: readonly string[]) => void,
-  answerGap: (reason: Gap["reason"]) => void,
-): Promise<{ readonly listing: Listing; readonly items: Item[] }> {
+  floorOf: () => number,
+  noteUnreachable: (index: number, locations: readonly string[]) => void,
+): Promise<{ readonly listing: Listing; readonly items: Item[]; readonly googleNow: number | undefined; readonly unfinished: readonly number[]; readonly complete: boolean }> {
   const unfinished: number[] = []
   let complete = true
   let newest: number | undefined
-  const stamp = (value: number | undefined) => {
-    if (value !== undefined) newest = newest === undefined ? value : Math.max(newest, value)
+  let firstDate: number | undefined
+  const seen = (listing: Listing) => {
+    if (firstDate === undefined) firstDate = listing.firstDate
+    if (listing.newest !== undefined) newest = newest === undefined ? listing.newest : Math.max(newest, listing.newest)
   }
   // PENDING, then RUNNING: a job moves only forward, so one that moves between the two calls is in one of them, and
   // one that finishes before the walk reaches it is listed DONE there.
-  for (const project of projects) {
+  for (const [index, project] of projects.entries()) {
     for (const filter of ["pending", "running"] as const) {
-      const listing = new Listing(deps, project, filter, state.f, undefined, noteUnreachable)
+      const listing = new Listing(deps, index, project, filter, floorOf(), undefined, noteUnreachable)
       for (let call = 0; call < UNFINISHED_CALLS && !listing.done; call++) {
         for (const item of await listing.fetch()) unfinished.push(item.creation)
       }
-      stamp(listing.newest)
+      seen(listing)
       if (!listing.done) complete = false
     }
   }
-  const listing = new Listing(deps, projects[0]!, "done", state.f, undefined, noteUnreachable)
+  const listing = new Listing(deps, 0, projects[0]!, "done", floorOf(), undefined, noteUnreachable)
   const items = await listing.fetch()
-  stamp(listing.newest)
-  const received = deps.ports.clock.now()
-
-  // Google's now when the read started, at least: a timestamp Google listed, less the host time that has passed since
-  // the read started (the listing calls); or the carried one, plus the host time since it was seen.
-  const estimates: number[] = []
-  if (newest !== undefined) estimates.push(newest - Math.max(0, received - hostNow))
-  if (state.t !== undefined && state.u !== undefined) estimates.push(state.t + Math.max(0, hostNow - state.u))
-  const googleNow = estimates.length > 0 ? Math.max(...estimates) : undefined
-  const cutoff = googleNow === undefined ? state.e : Math.max(state.e, googleNow - SETTLE_MS)
-
-  // The next floor: below every job still queued or running (tracked for a day after its creation), never above the
-  // cutoff. A listing too long to finish leaves the floor where it is, which only costs a longer walk.
-  let next = cutoff
-  let untracked = false
-  if (!complete) next = state.f
-  else {
-    for (const creation of unfinished) {
-      if (creation < cutoff - LOOKBACK_MS) untracked = true
-      else next = Math.min(next, creation)
-    }
-  }
-  if (untracked) answerGap("window-truncated")
-
-  if (googleNow !== undefined) {
-    state.t = googleNow
-    state.u = hostNow
-  }
-  state.c = cutoff
-  state.n = Math.max(next, state.f)
-  state.i = 0
-  delete state.p
-  delete state.h
-  return { listing, items }
+  seen(listing)
+  return { listing, items, googleNow: firstDate ?? newest, unfinished, complete }
 }
 
 /** The contract's page, with this plugin's name on it and the cursor the next call reads from. */
@@ -498,6 +528,13 @@ function pageOf(
   binding: Binding,
 ): EventsListResult {
   // Oldest first on the page; the read as a whole is ordered by its walk, which the cursor carries.
+  if (state.d !== undefined && state.d.length > 0) {
+    try {
+      encodeState(binding, state)
+    } catch {
+      throw sourceError("UNAVAILABLE", "BigQuery reported more locations unreachable than this source's cursor can hold, so nothing was read.", "Call the source again later with the same cursor; nothing is lost while it waits.", { retryAfterSec: 300 })
+    }
+  }
   const ordered = [...events].sort((left, right) => Date.parse(left.occurred_at) - Date.parse(right.occurred_at) || (left.external_id < right.external_id ? -1 : 1))
   return {
     source: "jobs",

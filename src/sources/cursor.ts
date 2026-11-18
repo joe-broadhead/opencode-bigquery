@@ -4,40 +4,47 @@
  * (the codec keeps `v`, `s` and `b` for itself). Every time is milliseconds on **Google's** clock unless it says host.
  *
  * Between reads (the source's whole memory):
- * - `e`, the **end frontier**: every job of the scope that ended at or before `e` was delivered, or a gap said so;
+ * - `e`, the **end frontier**: every job that ended at or before `e` was delivered, or a gap said so;
  * - `f`, the **creation floor**: every job that can still end after `e` was created at or after `f`. It sits below the
  *   oldest job that was still queued or running at the last read (at most 24 h back), and below any job seen finished
  *   after `e`, so the next read lists `[f, …]` and nothing older;
- * - `t`, `u`: the newest Google timestamp seen (`t`) and the host time it was seen at (`u`). Google's now is at least
- *   `t + (host now − u)`: the host's offset from Google cancels, only its rate is trusted;
- * - `o`: 1 while Google keeps reporting a location unreachable and the hold has passed (each read then answers a gap).
+ * - `d`, the **held locations**: `[location, e, f, 0|1]` for each location Google reported unreachable (in any project
+ *   of the scope; it is held in all of them), with the frontier and floor it had then. Its jobs are not delivered while
+ *   it is dark; when Google reaches it again, a read walks it from its own floor and delivers what ended after its own
+ *   frontier. The fourth element is 1 while a read catches it up. One that went dark in the middle of a read also keeps
+ *   that read's cutoff and the walk's position (`c, i, p, h`), so the catch-up skips what that read delivered. At most
+ *   four.
  *
  * During a read that spans pages (absent once a read completes):
  * - `c`, the read's **cutoff**: it delivers the jobs that ended in `(e, c]`, and leaves jobs created after `c` to the
- *   next read. Fixed when the read starts, so a later page never moves it;
+ *   next read. Fixed when the read starts from Google's own time, so a later page never moves it;
  * - `n`, the next read's floor so far;
  * - `i`, `p`, `h`: the walk's position: project `i` of the sorted scope, every job created after `p`, and those created
  *   at `p` whose id hash is at most `h`, are handled;
  * - `g`: 1 once this read answered its gap, so no later page repeats it.
  *
- * Worst case: eleven fields, nine of them 13-digit numbers, one 12-character hash, plus the codec's own `v`, `s` and
- * 16-character binding hash: about 210 characters of JSON, about 290 of base64url, whatever the account, scope, load
- * or pause. The contract's cap is 1,024.
+ * Worst case: about 260 characters with no location held; with four held mid-read, each a 32-character name, four
+ * 13-digit times, a project index and a hash, measured at under 1,024 in test/unit/sources/clock.test.ts. A cursor
+ * that would not fit fails the page with `UNAVAILABLE` and the cursor waits.
  */
 import { MAX_CURSOR_LENGTH, canonicalScope, decodeBoundCursor, encodeBoundCursor, type Scope } from "@we-the-rebel-alliance/source-contract/cursor"
 import { NAMESPACE } from "../constants.js"
 import { sourceError } from "./errors.js"
+
+/**
+ * A held location: its name (lower case), its frontier, its floor, 1 while a read catches it up (else 0), and, when it
+ * went dark in the middle of a read, that read's cutoff and the walk's position then (`p` -1 when the walk had handled
+ * nothing in project `i` yet).
+ */
+export type Dark = [string, number, number, 0 | 1] | [string, number, number, 0 | 1, number, number, number, string]
 
 export interface CursorState {
   /** The end frontier: every job that ended at or before it was delivered, or a gap said so. */
   e: number
   /** The creation floor: every job that can still end after `e` was created at or after it. */
   f: number
-  /** The newest Google timestamp seen, and the host time it was seen at. */
-  t?: number
-  u?: number
-  /** 1 while an unreachable location's outage is past the hold and each read answers a gap. */
-  o?: 1
+  /** The held locations: `[location, frontier, floor, 1 while caught up?]`. */
+  d?: Dark[]
   /** This read's cutoff: it delivers jobs that ended in `(e, c]`. Absent between reads. */
   c?: number
   /** The next read's creation floor, so far. */
@@ -91,11 +98,26 @@ export function decodeState(binding: Binding, cursor: string): Decoded {
   const f = raw["f"]
   if (!time(e) || !time(f)) return { ok: false, what: "The cursor does not carry this source's position." }
   const state: CursorState = { e, f }
-  if (time(raw["t"]) && time(raw["u"])) {
-    state.t = raw["t"]
-    state.u = raw["u"]
+  if (raw["d"] !== undefined) {
+    const held = raw["d"]
+    if (!Array.isArray(held) || held.length > 4) return { ok: false, what: "The cursor's held locations are not ones this plugin wrote." }
+    const entries: Dark[] = []
+    for (const entry of held as unknown[]) {
+      if (!Array.isArray(entry) || (entry.length !== 4 && entry.length !== 8)) return { ok: false, what: "The cursor's held locations are not ones this plugin wrote." }
+      const [location, frontier, floor, catching, cutoff, index, creation, hash] = entry as unknown[]
+      if (typeof location !== "string" || !/^[a-z0-9-]{1,32}$/.test(location) || !time(frontier) || !time(floor) || (catching !== 0 && catching !== 1)) {
+        return { ok: false, what: "The cursor's held locations are not ones this plugin wrote." }
+      }
+      if (entry.length === 4) {
+        entries.push([location, frontier, floor, catching])
+        continue
+      }
+      const positioned = time(cutoff) && typeof index === "number" && Number.isInteger(index) && index >= 0 && (creation === -1 || time(creation)) && typeof hash === "string" && (creation === -1 ? hash === "" : /^[0-9a-f]{12}$/.test(hash))
+      if (!positioned) return { ok: false, what: "The cursor's held locations are not ones this plugin wrote." }
+      entries.push([location, frontier, floor, catching, cutoff as number, index as number, creation as number, hash as string])
+    }
+    state.d = entries
   }
-  if (raw["o"] === 1) state.o = 1
   // A read in progress carries its cutoff, its next floor and its position together, or not at all.
   if (raw["c"] !== undefined) {
     const c = raw["c"]

@@ -2,7 +2,7 @@
 // requests the host may make are to this file's loopback fake, which serves Google's two hosts in Google's own shapes
 // (a full-projection `bigquery#jobList`, a `Job`, a `getQueryResults` answer, token-info); `close()` fails the test if
 // anything else left the machine.
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { Rpc } from "@opencode/plugin/rpc"
@@ -177,7 +177,8 @@ describe("the sources in a host", () => {
       const answer = (await save.execute({ project: PROJECT, jobId: "job-1", location: "US", path: file, format: "csv" }, invocation(await session(host)) as never)) as {
         output?: Record<string, unknown>
       }
-      expect(answer.output).toMatchObject({ state: "done", path: file, rows: 2, charts: { format: "csv", rows: 2, fitsCharts: true } })
+      // The project is under the system's /tmp, a link on macOS (/private/tmp): the answer is the file's real path.
+      expect(answer.output).toMatchObject({ state: "done", path: realpathSync(file), rows: 2, charts: { format: "csv", rows: 2, fitsCharts: true } })
       expect(readFileSync(file, "utf8")).toBe("id,note\r\n1,one\r\n2,two\r\n")
     } finally {
       if (existsSync(file)) rmSync(file, { force: true })

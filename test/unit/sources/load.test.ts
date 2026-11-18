@@ -4,7 +4,7 @@
 // each finished job is delivered exactly once, or a gap that precedes it says it may be missing — and here, where
 // nothing is lost on Google's side, no gap at all. These are review bigquery-9's probes (H1, M1, M3, LOW 1) as tests.
 import { describe, expect, test } from "vitest"
-import { LIST_CALLS, OUTAGE_HOLD_MS, UNFINISHED_CALLS } from "../../../src/sources/events.js"
+import { LIST_CALLS, SETTLE_MS, UNFINISHED_CALLS } from "../../../src/sources/events.js"
 import { harness } from "./support.js"
 import { audit, DAY, HOUR, MIN, readOnce, newReading, Sim, simulate, workload, type SimJob } from "./sim.js"
 
@@ -110,8 +110,6 @@ describe("bigquery.jobs at realistic load", () => {
     ["the host's clock 10 min behind Google's", { skewMs: -10 * MIN }],
     ["DONE listed 5 s after the end", { lagMs: 5_000 }],
     ["DONE listed 60 s after the end, and a second per jobs.list call", { lagMs: 60_000, perCallMs: 1_000 }],
-    ["no Date header on Google's answers, and the host's clock 15 min ahead", { date: false, skewMs: 15 * MIN }],
-    ["no Date header on Google's answers, and DONE listed 60 s after the end", { date: false, lagMs: 60_000 }],
   ] as const) {
     test(`Google's clock decides: ${name}, 300 an hour read every 5 min`, async () => {
       const target = harness()
@@ -119,6 +117,26 @@ describe("bigquery.jobs at realistic load", () => {
       const sim = new Sim(target, jobs, world)
       const reading = await simulate(sim, target, { since: NOW, every: 5 * MIN, until: NOW + 26 * HOUR })
       expectExact(reading, jobs, NOW)
+    }, 120_000)
+  }
+
+  for (const [name, world] of [
+    ["the host's clock 15 min ahead", { date: false, skewMs: 15 * MIN }],
+    ["DONE listed 60 s after the end", { date: false, lagMs: 60_000 }],
+  ] as const) {
+    test(`with no Date header on Google's answers, job times alone keep it exact: ${name}`, async () => {
+      // Without a Date, Google's now is the newest job time an answer shows, so the last jobs of a run wait for a
+      // later one; nothing is lost or repeated, and every job that ended before the newest one is delivered.
+      const target = harness()
+      const jobs = workload({ perHour: 300, hours: 24, start: NOW, longShare: 0.05, seed: 5 })
+      const sim = new Sim(target, jobs, world)
+      const reading = await simulate(sim, target, { since: NOW, every: 5 * MIN, until: NOW + 26 * HOUR })
+      const result = audit(reading, owed(jobs, NOW))
+      expect(result.duplicated).toEqual([])
+      expect(result.unexpected).toEqual([])
+      expect(reading.gaps).toEqual([])
+      const waiting = jobs.filter((job) => result.missing.includes(job.jobId))
+      expect(waiting.every((job) => job.ended > sim.lastEnd() - SETTLE_MS - 61_000)).toBe(true)
     }, 120_000)
   }
 
@@ -167,43 +185,35 @@ describe("bigquery.jobs at realistic load", () => {
     expect(result.duplicated).toEqual([])
   })
 
-  test("an unreachable location for 2 h: reads answer UNAVAILABLE and wait, then deliver everything, with no gap", async () => {
+  test("an unreachable location for 2 h: the read goes on without it, then delivers it, with no gap and no loss", async () => {
     const target = harness()
     const places = [{ location: "US" }, { location: "EU" }]
     const jobs = workload({ perHour: 120, hours: 12, start: NOW, places, seed: 8 })
     const down = { from: NOW + 3 * HOUR, to: NOW + 5 * HOUR }
     const sim = new Sim(target, jobs, { unreachable: (google) => (google >= down.from && google < down.to ? ["EU"] : []) })
     const reading = await simulate(sim, target, { since: NOW, every: 15 * MIN, until: NOW + 14 * HOUR })
-    expect(reading.errors.length).toBeGreaterThan(0)
-    expect(reading.errors.every((error) => error.startsWith("UNAVAILABLE: BigQuery reported the location EU unreachable"))).toBe(true)
-    const result = audit(reading, owed(jobs, NOW))
-    expect(result.missing).toEqual([])
-    expect(result.duplicated).toEqual([])
-    expect(reading.gaps).toEqual([])
+    expectExact(reading, jobs, NOW)
   }, 120_000)
 
-  test("a location unreachable for longer than the hold: the source goes on, with a gap on each read it is down", async () => {
+  test("a location unreachable for 8 days: no gap, no loss, and the other location is read all along", async () => {
     const target = harness()
     const places = [{ location: "US" }, { location: "EU" }]
     const jobs = workload({ perHour: 20, hours: 10 * 24, start: NOW, places, seed: 12 })
     const down = { from: NOW + DAY, to: NOW + 9 * DAY }
     const sim = new Sim(target, jobs, { unreachable: (google) => (google >= down.from && google < down.to ? ["EU"] : []) })
-    const reading = await simulate(sim, target, { since: NOW, every: 6 * HOUR, until: NOW + 10 * DAY })
-    // Waiting (UNAVAILABLE) until the hold has passed, then one gap per read while EU stays down; none once it is back.
-    expect(reading.errors.length).toBeGreaterThanOrEqual(Math.floor(OUTAGE_HOLD_MS / (6 * HOUR)) - 1)
-    expect(reading.errors.every((error) => error.startsWith("UNAVAILABLE: "))).toBe(true)
-    expect(reading.gaps.length).toBeGreaterThan(0)
-    expect(reading.gaps.every((gap) => gap.reason === "window-truncated" && gap.at < down.to)).toBe(true)
-    // Every US job is delivered once. An EU job is delivered once, or ended while EU was down, after a gap that says so.
-    const result = audit(reading, owed(jobs, NOW))
-    expect(result.duplicated).toEqual([])
-    const lost = jobs.filter((job) => result.missing.includes(job.jobId))
-    expect(lost.length).toBeGreaterThan(0)
-    for (const job of lost) {
-      expect(job.location).toBe("EU")
-      // It ended after the last read before EU went down, and before EU came back.
-      expect(job.ended >= down.from - 6 * HOUR && job.ended < down.to).toBe(true)
-      expect(reading.gaps.some((gap) => Date.parse(gap.since) <= job.ended)).toBe(true)
+    const usBy = new Map<string, number>()
+    const reading = newReading()
+    target.clock.time = NOW + MIN
+    while (target.clock.now() <= NOW + 10 * DAY) {
+      await readOnce(sim, target, reading, { since: NOW })
+      for (const id of reading.delivered.keys()) if (!usBy.has(id)) usBy.set(id, target.clock.now())
+      target.clock.advance(6 * HOUR)
     }
+    target.clock.time = sim.lastEnd() + 2 * HOUR
+    await readOnce(sim, target, reading, {})
+    expectExact(reading, jobs, NOW)
+    // US jobs that ended during the outage were delivered within a read of their end, not after EU came back.
+    const usDuring = jobs.filter((job) => job.location === "US" && job.ended > down.from && job.ended < down.to - 7 * HOUR)
+    expect(usDuring.every((job) => (usBy.get(job.jobId) ?? Infinity) < down.to)).toBe(true)
   }, 120_000)
 })

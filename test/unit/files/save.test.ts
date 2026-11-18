@@ -3,7 +3,7 @@
 // readers — the CSV and JSONL by plain parsing, Parquet by test/unit/files/parquet-read.ts — and nothing leaves the
 // machine.
 import { createHash } from "node:crypto"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterAll, describe, expect, test } from "vitest"
@@ -12,10 +12,16 @@ import { jobStatus, harness, resultPage, runTool, PROJECT, LOCATION, type Harnes
 import { readParquet } from "./parquet-read.js"
 
 const roots: string[] = []
+/**
+ * A fresh folder, named through a symbolic link on every platform, as macOS's temporary folder is (`/var` →
+ * `/private/var`): the save answers and asks for the real path, so the tests expect `realpathSync` of the name.
+ */
 function directory(): string {
-  const path = mkdtempSync(join(tmpdir(), "bq-save-"))
-  roots.push(path)
-  return path
+  const base = mkdtempSync(join(tmpdir(), "bq-save-base-"))
+  roots.push(base)
+  mkdirSync(join(base, "real"))
+  symlinkSync(join(base, "real"), join(base, "alias"))
+  return mkdtempSync(join(base, "alias", "bq-save-"))
 }
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true })
@@ -54,7 +60,11 @@ describe("bigquery_save", () => {
     const target = saved(dir)
     target.bigquery.on("results", async () => page())
     const { output, asserted } = await runTool(target, "save", input(join(dir, "orders.csv"), "csv"))
-    expect(output).toMatchObject({ state: "done", path: join(dir, "orders.csv"), rows: 2, charts: { format: "csv", rows: 2, fitsCharts: true } })
+    // The folder was named through a link: the answer is where the file is, its real path.
+    const real = join(realpathSync(dir), "orders.csv")
+    expect(join(realpathSync(dir), "orders.csv")).not.toBe(join(dir, "orders.csv"))
+    expect(output).toMatchObject({ state: "done", path: real, rows: 2, charts: { path: real, format: "csv", rows: 2, fitsCharts: true } })
+    expect(asserted.find((request) => request.action === "edit")?.resources).toEqual([real])
     const text = readFileSync(join(dir, "orders.csv"), "utf8")
     expect(text).toBe(`id,amount,note\r\n1,2.5,"has,comma"\r\n2,,plain\r\n`)
     expect(output["bytes"]).toBe(Buffer.byteLength(text))
