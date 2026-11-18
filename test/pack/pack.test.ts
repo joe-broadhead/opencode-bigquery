@@ -213,11 +213,12 @@ describe.each(TESTED_HOSTS)("installed alone, in stock OpenCode %s", (version) =
       expect(described.id).toBe(TOOLS_RPC_ID)
       expect(described.methods.map((method) => method.name).sort()).toEqual([...RPC_METHOD_NAMES].sort())
 
-      // A script's call, as a session of the build agent: a read the default rules allow reaches the registry, which
-      // answers NOT_BUILT with no request off the machine; an uncapped-read plan is refused to a script.
+      // A script's call, as a session of the build agent: a read the default rules allow passes the registry and stops at
+      // the runtime's sign-in check (no account is signed in), with no request off the machine; an uncapped-read plan is
+      // refused to a script.
       const { data: session } = await host.api<{ data: { id: string } }>("POST", "/api/session", { title: "bigquery pack test", agent: "build", location: { directory: host.directory } })
       const list = await host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/list`, { input: { sessionID: session.id, input: {} } })
-      expect(list.text).toContain("NOT_BUILT")
+      expect(list.text).toContain("AUTH_REQUIRED")
       const uncapped = await host.raw("POST", `/api/rpc/${TOOLS_RPC_ID}/query`, { input: { sessionID: session.id, input: { planId: "plan_inventedinventedinvented1" } } })
       expect(uncapped.text).toContain("PERMISSION_DENIED")
       expect(uncapped.text).toContain("bigquery.uncapped_read")

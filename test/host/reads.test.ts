@@ -65,13 +65,16 @@ describe("the read tools in a host", () => {
     }
   }, 120_000)
 
-  test("a read the rules allow reaches the registry's assert and the unbuilt ports, not the network", async () => {
+  test("a read the rules allow passes the registry's assert and stops at the sign-in, with nothing off the machine", async () => {
     const host = await startHost({ options: { accounts: { default: { billingProject: "invented-proj", location: "US" } } } })
     try {
       const tool = await liveTool(host, "list")
       const outcome = (await tool.execute({}, invocation(await session(host)) as never)) as { output?: Record<string, unknown> }
-      // No package has built the BigQuery port yet, so the registry's guarded port answers NOT_BUILT.
-      expect(JSON.stringify(outcome.output ?? outcome)).toContain("NOT_BUILT")
+      // The rules allowed it (the deny case above shows the same assert refusing), so the call reached package B's
+      // runtime, which finds no sign-in for the account and answers before any request; `close()` proves none left.
+      const answer = JSON.parse(JSON.stringify(outcome.output ?? outcome)) as Record<string, unknown>
+      expect(answer).toMatchObject({ state: "refused", error: "AUTH_REQUIRED" })
+      expect(String(answer.next)).toContain("/connect")
     } finally {
       await host.close()
     }
