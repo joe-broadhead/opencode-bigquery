@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { ACTIONS, ASKS } from "../../src/domain/actions.js"
+import { ACTIONS, ASKS, PERMISSION_ONLY } from "../../src/domain/actions.js"
 
 const SRC = process.env.JELLY_SRC
 const contracts = SRC ? join(SRC, "protocol/contracts/src") : ""
@@ -51,12 +51,16 @@ test.skipIf(!present)("Jelly's access rules: reads run at every level, changes f
   }
   const table: Record<string, Record<string, Effect>> = {}
   for (const access of ["all", "ask-changes", "read-only"] as const) {
-    table[access] = Object.fromEntries([...ACTIONS.map((entry) => entry.action), ASKS.uncappedRead, "bigquery.undeclared_tool"].map((action) => [action, decide(access, action)]))
+    table[access] = Object.fromEntries([...ACTIONS.map((entry) => entry.action), ...PERMISSION_ONLY.map((entry) => entry.action), ASKS.uncappedRead, "bigquery.undeclared_tool"].map((action) => [action, decide(access, action)]))
   }
   for (const entry of ACTIONS) {
     expect([table.all![entry.action], table["ask-changes"]![entry.action], table["read-only"]![entry.action]], entry.action).toEqual(
       entry.readOnly ? ["allow", "allow", "allow"] : ["allow", "ask", "deny"],
     )
+  }
+  // The source contract's per-operation read is a read: allowed at every level.
+  for (const entry of PERMISSION_ONLY) {
+    expect([table.all![entry.action], table["ask-changes"]![entry.action], table["read-only"]![entry.action]], entry.action).toEqual(["allow", "allow", "allow"])
   }
   expect([table.all![ASKS.uncappedRead], table["ask-changes"]![ASKS.uncappedRead], table["read-only"]![ASKS.uncappedRead]]).toEqual(["allow", "ask", "ask"])
   expect([table.all!["bigquery.undeclared_tool"], table["ask-changes"]!["bigquery.undeclared_tool"], table["read-only"]!["bigquery.undeclared_tool"]]).toEqual(["allow", "ask", "deny"])

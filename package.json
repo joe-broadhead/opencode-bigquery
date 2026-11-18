@@ -242,6 +242,13 @@
         "effect": "allow",
         "readOnly": true,
         "note": "Names the signed-in account for sources; makes no BigQuery call"
+      },
+      {
+        "name": "bigquery.read",
+        "permission": "bigquery.read",
+        "effect": "allow",
+        "readOnly": true,
+        "note": "Reads the BigQuery metadata and data a source you bound names; never changes anything"
       }
     ],
     "skills": [

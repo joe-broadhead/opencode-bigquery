@@ -196,6 +196,8 @@ export interface Request<T> {
   /** How long one attempt may take before it counts as a stalled connection; `DEADLINE_MS` by default. */
   readonly deadlineMs?: number
   readonly expect?: (body: unknown) => T
+  /** Called with the headers of the answer that is returned (not of a retried one). */
+  readonly onHeaders?: (headers: Headers) => void
 }
 
 export interface HttpDeps {
@@ -295,6 +297,7 @@ export function createHttp(deps: HttpDeps): Http {
           continue
         }
         if (response.status < 200 || response.status >= 300) throw httpFailure(response.status, json, retryAfterSec, request.task)
+        request.onHeaders?.(response.headers)
         return (request.expect ? request.expect(json) : json) as T
       }
     },

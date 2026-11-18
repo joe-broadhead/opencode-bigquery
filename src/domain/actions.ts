@@ -125,6 +125,19 @@ export const ACTIONS: readonly ActionEntry[] = [
   }),
 ]
 
+/**
+ * Permission-only reads: actions no tool is named for, asserted by a tool besides its own. `bigquery.read` is the source
+ * contract's operation rule: a source's read asserts it on each `<account>:<operation>` it uses (contract L1, "a dotted
+ * operation … is asserted as `<namespace>.read`"), so a person's off switch for one operation is consulted. Declared
+ * read-only and allowed at every access, as every read is.
+ */
+export const PERMISSION_ONLY: readonly { readonly action: string; readonly readOnly: true; readonly owner: Package; readonly note: string }[] = [
+  { action: `${NAMESPACE}.read`, readOnly: true, owner: "E", note: "Reads the BigQuery metadata and data a source you bound names; never changes anything" },
+]
+
+/** The source contract's per-operation read action (contract L1). */
+export const SOURCE_READ = PERMISSION_ONLY[0]!.action
+
 /** The run-time asks: actions a tool asserts at run time, declared in jelly `asks`. Whether one asks is the rules'. */
 export const ASKS = {
   /** `bigquery_query({ planId })` asserts it before running a read the byte cap cannot bound. */
@@ -137,8 +150,8 @@ export const CHANGE_ACTIONS = ACTIONS.filter((item) => !item.readOnly)
 /** The tools RPC's methods: every read, tools and method-only entries alike. A change is never a method. */
 export const RPC_METHODS = ACTIONS.filter((item) => item.readOnly && item.class === "read")
 
-/** Every action the plugin may assert: the entries' actions and the run-time asks. */
-export const ASSERTABLE: ReadonlySet<string> = new Set([...ACTIONS.map((item) => item.action), ...Object.values(ASKS)])
+/** Every action the plugin may assert: the entries' actions, the permission-only reads and the run-time asks. */
+export const ASSERTABLE: ReadonlySet<string> = new Set([...ACTIONS.map((item) => item.action), ...PERMISSION_ONLY.map((item) => item.action), ...Object.values(ASKS)])
 
 /** The tool that commits a category. */
 export const COMMIT_TOOL: Readonly<Record<Category, string>> = {
