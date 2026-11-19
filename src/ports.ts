@@ -210,6 +210,11 @@ export interface Ports {
   readonly ledger: LedgerPort
   readonly plans: PlanStorePort
   readonly clock: Clock
+  /**
+   * False when this install is not a tagged release: a tool that would call Google refuses before its handler.
+   * Absent on a test's own ports, so those tests keep using the handlers. Production sets it from `isTaggedRelease`.
+   */
+  readonly released?: boolean
 }
 
 /** The dry run's numbers as the guards read them. */

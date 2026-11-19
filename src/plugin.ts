@@ -12,6 +12,7 @@ import { registerPermissionDefaults } from "./permissions.js"
 import { registerSkills, SKILL_IDS, skillPath } from "./skills.js"
 import { registerStatus } from "./status.js"
 import type { HostAssert, ToolSpec } from "./tool-spec.js"
+import { observeFromHost } from "./release.js"
 import { registerTools } from "./tools.js"
 
 type Registration = { dispose(): Promise<void> }
@@ -43,6 +44,7 @@ export function createBigQueryPlugin(seam: BigQuerySeam) {
       const problems = new Map<string, string>()
       const report = (area: string) => (problem: string | undefined) => void (problem ? problems.set(area, problem) : problems.delete(area))
       const assert: HostAssert = (request) => ctx.permission.assert(request as never)
+      await observeFromHost(ctx.plugin.list, PLUGIN_ID)
       const specs = seam.specs(options)
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
