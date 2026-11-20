@@ -32,6 +32,13 @@ describe("a source install does not call Google", () => {
     expect(isTaggedRelease(packageSource("v0.0.1"))).toBe(true)
     expect(isTaggedRelease(packageSource("v0.0.1-rc.1"))).toBe(true)
     expect(isTaggedRelease(packageSource("master"))).toBe(false)
+    // The spec must name this plugin's own repository, in the forms a real install records.
+    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-bigquery#v0.0.1", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "git+https://github.com/joe-broadhead/opencode-bigquery.git#v0.0.1", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "git+ssh://git@github.com/joe-broadhead/opencode-bigquery.git#v0.0.1", version: SHA })).toBe(true)
+    // Another repository's semver tag is not a release of this plugin.
+    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-gws#v0.0.11", version: SHA })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:someone/opencode-bigquery#v0.0.1", version: SHA })).toBe(false)
     expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-bigquery" })).toBe(false)
     expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-bigquery", version: "0.0.1" })).toBe(false)
     expect(isTaggedRelease({ type: "builtin" })).toBe(false)
@@ -48,6 +55,13 @@ describe("a source install does not call Google", () => {
       expect(isTaggedRelease({ type: "local", path: dir })).toBe(false)
       git("tag", "v0.0.1")
       expect(isTaggedRelease({ type: "local", path: dir })).toBe(true)
+      // A folder named after a tag, around a copy with no git tag, is not a release.
+      const named = mkdtempSync(join(tmpdir(), "@v0.0.1-bigquery-"))
+      try {
+        expect(isTaggedRelease({ type: "local", path: named })).toBe(false)
+      } finally {
+        rmSync(named, { recursive: true, force: true })
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
