@@ -126,7 +126,7 @@ function specOf(entry: ActionEntry, options: Options, ports: Ports, aliases: rea
     async run(input: unknown, call: Call): Promise<Outcome<unknown>> {
       try {
         // A source install must not reach Google. Handlers stay; a tagged install, or a test that simulates one, runs them.
-        if (ports.released === false && entry.operation !== "local") {
+        if (ports.released !== undefined && !(await ports.released()) && entry.operation !== "local") {
           throw new BigQueryError("NOT_RELEASED", NOT_RELEASED_DETAIL, NOT_RELEASED_NEXT)
         }
         const record = (input ?? {}) as Record<string, unknown>

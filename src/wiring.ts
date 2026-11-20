@@ -17,8 +17,7 @@ export function stateDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "opencode-bigquery")
 }
 
-export function createPorts(options: Options): Ports {
-  const released = isTaggedRelease()
+export function createPorts(options: Options, released: () => Promise<boolean> = async () => isTaggedRelease()): Ports {
   const fetch = guardGoogleFetch(globalThis.fetch, released, () => {
     throw new BigQueryError("NOT_RELEASED", NOT_RELEASED_DETAIL, NOT_RELEASED_NEXT)
   })

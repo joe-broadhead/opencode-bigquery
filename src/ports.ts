@@ -211,10 +211,10 @@ export interface Ports {
   readonly plans: PlanStorePort
   readonly clock: Clock
   /**
-   * False when this install is not a tagged release: a tool that would call Google refuses before its handler.
-   * Absent on a test's own ports, so those tests keep using the handlers. Production sets it from `isTaggedRelease`.
+   * Resolves false when this install is not a tagged release: a tool that would call Google refuses before its handler.
+   * Absent on a test's own ports, so those tests keep using the handlers. Production reads it from the host's report.
    */
-  readonly released?: boolean
+  readonly released?: () => Promise<boolean>
 }
 
 /** The dry run's numbers as the guards read them. */

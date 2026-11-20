@@ -12,14 +12,14 @@ import { registerPermissionDefaults } from "./permissions.js"
 import { registerSkills, SKILL_IDS, skillPath } from "./skills.js"
 import { registerStatus } from "./status.js"
 import type { HostAssert, ToolSpec } from "./tool-spec.js"
-import { observeFromHost } from "./release.js"
+import { createReleaseGate } from "./release.js"
 import { registerTools } from "./tools.js"
 
 type Registration = { dispose(): Promise<void> }
 
 /** Internal seam: the specs to register, and which are model tools. The registry supplies them; tests may pass their own. */
 export interface BigQuerySeam {
-  readonly specs: (options: ReturnType<typeof loadOptions>) => readonly ToolSpec[]
+  readonly specs: (options: ReturnType<typeof loadOptions>, released: () => Promise<boolean>) => readonly ToolSpec[]
   /** The model's tools among the specs; the rest are tools RPC methods only. */
   readonly isModelTool: (spec: ToolSpec) => boolean
   /** How many specs answer NOT_BUILT, for status. */
@@ -44,8 +44,8 @@ export function createBigQueryPlugin(seam: BigQuerySeam) {
       const problems = new Map<string, string>()
       const report = (area: string) => (problem: string | undefined) => void (problem ? problems.set(area, problem) : problems.delete(area))
       const assert: HostAssert = (request) => ctx.permission.assert(request as never)
-      await observeFromHost(ctx.plugin.list, PLUGIN_ID)
-      const specs = seam.specs(options)
+      const gate = createReleaseGate(PLUGIN_ID, () => ctx.plugin.list)
+      const specs = seam.specs(options, () => gate.released())
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
         const tools = specs.filter(seam.isModelTool)
