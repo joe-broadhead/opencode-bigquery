@@ -24,6 +24,7 @@ import { SOURCE_HANDLERS } from "./handlers/sources.js"
 import { STATUS_HANDLERS } from "./handlers/status.js"
 import { accountsOf, type Options } from "./options.js"
 import type { Ports } from "./ports.js"
+import { NOT_RELEASED_DETAIL, NOT_RELEASED_NEXT } from "./release.js"
 import type { AssertRequest, Call, Outcome, ToolSpec } from "./tool-spec.js"
 
 /** OpenCode's own actions a tool may assert besides the table's: `bigquery_save` writes a local file. */
@@ -124,6 +125,10 @@ function specOf(entry: ActionEntry, options: Options, ports: Ports, aliases: rea
       : {}),
     async run(input: unknown, call: Call): Promise<Outcome<unknown>> {
       try {
+        // A source install must not reach Google. Handlers stay; a tagged install, or a test that simulates one, runs them.
+        if (ports.released !== undefined && !(await ports.released()) && entry.operation !== "local") {
+          throw new BigQueryError("NOT_RELEASED", NOT_RELEASED_DETAIL, NOT_RELEASED_NEXT)
+        }
         const record = (input ?? {}) as Record<string, unknown>
         const named = typeof record.account === "string" ? record.account : undefined
         const account = local && named === undefined ? (aliases.length === 1 ? aliases[0]! : "*") : resolveAccount(aliases, named)

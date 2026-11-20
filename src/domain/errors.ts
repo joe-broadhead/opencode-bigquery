@@ -77,6 +77,12 @@ export const ErrorCode = {
     state: "refused",
     owner: "day0",
   },
+  NOT_RELEASED: {
+    meaning: "This install is not a tagged release, so the tool did not call Google.",
+    next: "Install a tagged release when one exists. A source checkout does not call Google.",
+    state: "refused",
+    owner: "day0",
+  },
   ACCOUNT_REQUIRED: {
     meaning: "More than one account is configured and the call named none.",
     next: "Pass account with one of the configured aliases; bigquery_status lists them.",

@@ -7,8 +7,9 @@ for charts, and plan then commit changes.
 Unofficial; not affiliated with Google. BigQuery and Google Cloud are trademarks of Google LLC. The icon is the
 family's own tile, not Google's mark.
 
-> **Not yet released.** This is v0.0.1 before its first release. The nineteen tools are declared in one table and built
-> package by package; a tool a build does not carry yet answers `NOT_BUILT`, and nothing is sent to Google for it.
+> **Not yet released.** This is v0.0.1 before its first release. There is no release tag. The nineteen tools are declared
+> in one table and built package by package; a tool a build does not carry yet answers `NOT_BUILT`. An install that is
+> not a tagged release answers `NOT_RELEASED` and sends nothing to Google.
 
 ## Requirements
 
@@ -200,6 +201,7 @@ Every code the plugin raises, with its next step. `/bigquery-status` shows the p
 | `NEEDS_PLAN` | A read whose cost the cap cannot bound, that has external effects, or whose references could not be resolved; the reason is CAP_NOT_ENFORCEABLE, EXTERNAL_EFFECTS or UNRESOLVED_REFERENCE. | Call bigquery_plan({ sql }) and show the user the preview; with their go-ahead, bigquery_query({ planId }) for CAP_NOT_ENFORCEABLE, or the commit tool named for the others. |
 | `NOT_BUILT` | This tool is declared but not built yet in this version of the plugin; nothing was sent to Google. | Use another tool, or update the plugin. |
 | `NOT_FOUND` | The project, dataset, table, routine or job was not found. | Find the exact name with bigquery_list or bigquery_search. |
+| `NOT_RELEASED` | This install is not a tagged release, so the tool did not call Google. | Install a tagged release when one exists. A source checkout does not call Google. |
 | `OPTIONS_INVALID` | The plugin options are not valid: an unknown key, a wrong type, a value out of range, a write level on a headless account, or a secret where none belongs. | Fix the plugin options in opencode.json; the message names the option. |
 | `PERMISSION_DENIED` | IAM refused the call (the permission is named), or the call needs an approval that a script cannot give. | Ask an admin for the named role; from a script, run the call from a session instead. |
 | `PLAN_ALREADY_USED` | The plan was committed, or is being committed. Plans are single-use. | Check the earlier result with bigquery_jobs before planning the change again. |

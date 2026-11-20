@@ -89,6 +89,7 @@ When A to F have landed, before the live check:
 | `src/version.ts` | Day 0 |
 | `src/host-version.ts` | Day 0 |
 | `src/redact.ts` | Day 0 |
+| `src/release.ts` | Day 0 |
 | `src/skills.ts` | Day 0 |
 | `src/domain/*.ts` | Day 0 |
 | `src/host/script-methods.ts` | Day 0 |
