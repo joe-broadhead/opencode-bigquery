@@ -25,7 +25,7 @@ All notable changes to this project are documented here. The format follows [Kee
   Allowed runs it without asking, bounded by the 120-second job limit and an opt-in budget; the card, README, skill and
   docs say so.
 - The full `jelly` declaration (21 entries, the `bigquery.uncapped_read` ask, the Google sign-in with the disclosure)
-  and the `sources` block (`bigquery.jobs`, `bigquery.saved`), checked by the source contract v0.2.0.
+  and the `sources` block (`bigquery.jobs`, `bigquery.saved`), checked by the source contract v0.3.0.
 - `google-auth-library` 11.3.4, bundled for the opt-in ADC mode.
 - `docs/ownership.md`: which package owns each file.
 - The Google sign-in (package A): the two-level form with the disclosure, PKCE and the relay, DPoP with a P-256 key per

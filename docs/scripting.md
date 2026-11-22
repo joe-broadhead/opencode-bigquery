@@ -9,7 +9,7 @@ OpenCode server. It uses the tools RPC, `google-cloud.bigquery.tools`, through `
 opencode api post /api/rpc/google-cloud.bigquery.tools/<method> -H "x-opencode-directory:$PWD" -d '{"input":{"sessionID":"<id>","input":{…}}}'
 ```
 
-The transport is the source contract's (`@we-the-rebel-alliance/source-contract`, tag v0.2.0), shared by the family.
+The transport is the source contract's (`@we-the-rebel-alliance/source-contract`, tag v0.3.0), shared by the family.
 Only the read tools are methods; a change runs only from the model's tool, after its own asks.
 
 | Method | Class | The tool |

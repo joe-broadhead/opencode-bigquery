@@ -1,7 +1,7 @@
 /**
  * BigQuery's part of the tools RPC (`google-cloud.bigquery.tools`): the plugin value and the method table that the
  * source contract's `tools-rpc` module takes. The module (`@we-the-rebel-alliance/source-contract/tools-rpc`,
- * tag v0.2.0, bundled into `dist/index.js`) is the transport every plugin of the family shares:
+ * tag v0.3.0, bundled into `dist/index.js`) is the transport every plugin of the family shares:
  *
  *   POST /api/rpc/google-cloud.bigquery.tools/<method>
  *   { "input": { "sessionID": "<session>", "input": <the tool's input> } }

@@ -155,9 +155,9 @@ describe("the source contract's conformance kit", () => {
       ok: reports.length === 2 && reports.every((entry) => entry.ok),
       plugin: pkg.name,
       version: pkg.version,
-      contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.2.0" },
+      contract: { package: "@we-the-rebel-alliance/source-contract", tag: "v0.3.0" },
       notes: [
-        "bigquery.saved is declared cost.class billed and was checked as metered, with the same price table: the kit's billed-cost check (v0.2.0) is neither run nor not-applicable for a billed snapshot, which answers no page to price. Remove this override when source-contract v0.2.1's billed-cost patch is pinned (review bigquery-9, ruling 3).",
+        "bigquery.saved is declared cost.class billed and was checked as metered, with the same price table: the kit's billed-cost check (v0.3.0) is neither run nor not-applicable for a billed snapshot, which answers no page to price. Remove this override once a source-contract release makes the check not-applicable for a billed snapshot (review bigquery-9, ruling 3).",
       ],
       sources: reports,
     }

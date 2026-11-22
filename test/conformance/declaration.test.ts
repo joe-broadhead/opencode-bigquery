@@ -1,4 +1,4 @@
-// The `sources` block in package.json, checked by the source contract's own validators (v0.2.0, from its built dist):
+// The `sources` block in package.json, checked by the source contract's own validators (v0.3.0, from its built dist):
 // `checkSources`, `declarationProblems` and `assertDeclaration` with the registry's tools RPC methods, every one
 // read-only. The conformance kit's run over the methods (paging, gaps, refusals) is package E's (test/conformance/run).
 import { expect, test } from "bun:test"
