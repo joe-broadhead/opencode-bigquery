@@ -40,10 +40,10 @@ export const params = z
 export const planId = z.string().regex(/^plan_[A-Za-z0-9_-]{16,64}$/)
 
 /**
- * What the model reads about running an uncapped-read plan. Under Jelly's Allowed the run-time ask is not shown (D165),
- * so the absence of a prompt is never the user's consent: the model gets the go-ahead in the conversation first.
+ * What the model reads about running an uncapped-read plan. The access rules ask before it runs; the model still gets
+ * the user's go-ahead in the conversation first, so the absence of a prompt is never taken as consent.
  */
-export const UNCAPPED_PLAN_ID = "Run an uncapped-read plan instead of sql. The user may not be asked first (Jelly's Allowed): get the user's go-ahead in the conversation before you run it."
+export const UNCAPPED_PLAN_ID = "Run an uncapped-read plan instead of sql. The user is asked before it runs: get their go-ahead in the conversation first."
 
 export const STATES = ["done", "running", "refused", "failed", "cancelled"] as const
 
@@ -370,8 +370,8 @@ export const SavedListOutput = z.looseObject({
 /** The source probe: the identity, with no BigQuery call. */
 export const ProbeInput = z.strictObject({ account, source: z.enum(["jobs", "saved", "bigquery.jobs", "bigquery.saved"]).optional() })
 /**
- * The probe's owner. `verified: false` is held back until Jelly and Memory pin source-contract v0.2.0, whose readers
- * accept it (review bigquery-9, ruling 4); the fallback owner claims no address meanwhile.
+ * The probe's owner. `verified: false` is held back until consumers read source-contract v0.2.0, whose readers accept
+ * it (review bigquery-9, ruling 4); the fallback owner claims no address meanwhile.
  */
 export const ProbeOutput = z.looseObject({ owner: z.object({ id: z.string(), label: z.string().optional() }).optional() })
 

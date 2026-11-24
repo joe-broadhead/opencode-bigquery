@@ -334,7 +334,7 @@ describe("bigquery_job's row gate (review H-1)", () => {
 
   it("records a finished job this plugin started, under the tool it names; the ledger's jobId makes it one line (review M-1)", async () => {
     const h = harness()
-    h.bigquery.on("getJob", async () => jobStatus({ labels: { oc_plugin: "opencode-bigquery", oc_tool: "bigquery_query", oc_session: "abcdefabcdefabcd" } }))
+    h.bigquery.on("getJob", async () => jobStatus({ labels: { oc_plugin: "bigquery-plugin", oc_tool: "bigquery_query", oc_session: "abcdefabcdefabcd" } }))
     h.bigquery.on("getTable", async () => nativeTable())
     h.bigquery.on("results", async () => resultPage())
     await runTool(h, "job", { project: PROJECT, jobId: "oc_plugin_job" })

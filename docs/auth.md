@@ -1,6 +1,6 @@
 # Auth and accounts
 
-How `@joe-broadhead/opencode-bigquery` signs in to Google, what each level can do, and where every credential lives. The
+How `@we-the-rebel-alliance/bigquery-plugin` signs in to Google, what each level can do, and where every credential lives. The
 design's §3 and §3.1 are the source; this page is the version a person reads before connecting an account, and the module
 map is [docs/architecture.md](architecture.md).
 
@@ -68,13 +68,13 @@ the same.
   device-bound refresh token. It is never sent on a refresh. No sign-in sets `include_granted_scopes`, so a later Read
   sign-in returns a token without the write marker.
 - **Redirect:** by default a loopback listener on `127.0.0.1` (a random port, or `callbackPort`). A host that serves
-  OpenCode to a browser on another machine, Jelly included, supplies the relay's `redirectUri` and `callbackPort`
+  OpenCode to a browser on another machine, an app included, supplies the relay's `redirectUri` and `callbackPort`
   through the form's hidden fields; the plugin then listens on `callbackPort` and accepts the relay's path.
 - **Client precedence:** `accounts.<alias>.oauthClient`, then the plugin's `oauthClient`, then the client entered in the
   form, then the client of this alias's previous sign-in when it was entered in the form. With none, the sign-in is
   refused with `AUTH_CLIENT_REQUIRED`. No OAuth client ships in this package: a Desktop app client is yours, or your
   organisation's.
-- **The host's client JSON:** Jelly fills the form's hidden `clientJson` field with its Google client, which may be a
+- **The host's client JSON:** An app fills the form's hidden `clientJson` field with its Google client, which may be a
   Web application client (`{"web": …}` with its redirect URIs). The plugin checks the redirect against those URIs before
   the browser opens.
 
@@ -83,7 +83,7 @@ the same.
 At each sign-in the plugin generates a new P-256 key and sends DPoP proofs to Google's token endpoint, so Google binds
 the refresh token to that key.
 
-- The key lives in the plugin's own state folder, `$XDG_STATE_HOME/opencode-bigquery/keys/<alias>.jwk`, mode 0600 inside
+- The key lives in the plugin's own state folder, `$XDG_STATE_HOME/bigquery-plugin/keys/<alias>.jwk`, mode 0600 inside
   a 0700 folder — apart from OpenCode's credential store.
 - OpenCode's credential store holds the refresh token, the OAuth client and the sign-in record. **Access tokens stay in
   memory** and are never written by this plugin.

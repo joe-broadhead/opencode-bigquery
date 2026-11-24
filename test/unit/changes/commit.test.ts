@@ -61,7 +61,7 @@ describe("a commit: the plan, the assert and the run", () => {
     const request = run[0]![0] as Record<string, unknown>
     expect(request).toMatchObject({ maximumBytesBilled: 10 * 2 ** 30, jobTimeoutMs: 600_000, useQueryCache: false, location: "US" })
     expect(request.jobId).toMatch(/^oc_[A-Za-z0-9-]+$/)
-    expect(request.labels).toEqual({ oc_plugin: "opencode-bigquery", oc_tool: "bigquery_write", oc_session: expect.stringMatching(/^[0-9a-f]{16}$/) })
+    expect(request.labels).toEqual({ oc_plugin: "bigquery-plugin", oc_tool: "bigquery_write", oc_session: expect.stringMatching(/^[0-9a-f]{16}$/) })
     expect(request).not.toHaveProperty("destinationTable")
     expect(request).not.toHaveProperty("createSession")
 

@@ -1,8 +1,8 @@
 ---
-name: opencode-bigquery
+name: bigquery
 description: Use BigQuery from OpenCode - find datasets and tables, estimate a query before running it, run reads under the byte cap, save results to a file for charts, and plan then commit changes.
 ---
-If BigQuery's tools are absent, run `/connect` and choose BigQuery to sign in, or on Jelly call jelly_connection_request.
+If BigQuery's tools are absent, run `/connect` and choose BigQuery to sign in.
 
 # BigQuery
 
@@ -71,9 +71,9 @@ estimate for it is zero or too low. `query` answers `NEEDS_PLAN` with `reason: "
 
 1. `plan({ sql, params?, project?, location?, maxBytes? })` returns a `planId` and a preview whose `bound` says the cap
    may not bound the query, with the 120-second job limit.
-2. Show the user the preview. A read the byte cap cannot bound runs from a plan: call `query({ planId })` with the
-   user's go-ahead. Depending on the user's access setting the user may not be asked first (in Jelly under Allowed it
-   runs at once), so show the preview and wait for the user's go-ahead yourself.
+2. Show the user the preview. A read the byte cap cannot bound runs from a plan: call `query({ planId })` once the
+   user has agreed. The access rules ask before it runs, but never take the absence of a prompt as consent: show the
+   preview and wait for the user's go-ahead yourself.
 
 A script cannot run one: `bigquery_query({ planId })` is refused to the tools RPC.
 

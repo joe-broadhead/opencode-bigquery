@@ -82,7 +82,7 @@ describe("the read path's order (§5.1)", () => {
     expect(run.jobId).toBe("oc_00000000-0000-4000-8000-000000000001")
     expect(run.maximumBytesBilled).toBe(10 * 2 ** 30)
     expect(run.jobTimeoutMs).toBe(600_000)
-    expect(run.labels).toEqual({ oc_plugin: "opencode-bigquery", oc_tool: "bigquery_query", oc_session: expect.stringMatching(/^[0-9a-f]{16}$/) })
+    expect(run.labels).toEqual({ oc_plugin: "bigquery-plugin", oc_tool: "bigquery_query", oc_session: expect.stringMatching(/^[0-9a-f]{16}$/) })
     expect(run).not.toHaveProperty("destinationTable")
     expect(run).not.toHaveProperty("createSession")
     expect(run).not.toHaveProperty("connectionProperties")

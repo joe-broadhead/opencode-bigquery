@@ -45,7 +45,7 @@ export interface CachedToken {
 
 export interface AuthState {
   host?: AuthHost
-  /** `$XDG_STATE_HOME/opencode-bigquery`, or a test's folder. */
+  /** `$XDG_STATE_HOME/bigquery-plugin`, or a test's folder. */
   readonly stateDir: string
   /** Access tokens by alias; never written anywhere. */
   readonly tokens: Map<string, CachedToken>

@@ -15,7 +15,7 @@ describe("the tools transform", () => {
       },
     }
     const reports: (string | undefined)[] = []
-    await registerTools(ctx as never, { access: "all", specs: [], assert: async () => undefined, report: (problem) => reports.push(problem) })
+    await registerTools(ctx as never, { specs: [], assert: async () => undefined, report: (problem) => reports.push(problem) })
     expect(calls).toEqual([["namespace", { name: NAMESPACE, description: expect.stringContaining("BigQuery") }]])
     expect(reports).toEqual([undefined])
   })
@@ -23,7 +23,7 @@ describe("the tools transform", () => {
   it("never throws from the transform; a failure is reported", async () => {
     const ctx = { tool: { transform: async (callback: (editor: unknown) => void) => (callback({ namespace: () => { throw new Error("broken host") } }), { dispose: async () => undefined }) } }
     const reports: (string | undefined)[] = []
-    await registerTools(ctx as never, { access: "all", specs: [], assert: async () => undefined, report: (problem) => reports.push(problem) })
+    await registerTools(ctx as never, { specs: [], assert: async () => undefined, report: (problem) => reports.push(problem) })
     expect(reports[0]).toMatch(/^TOOLS_NOT_REGISTERED: .* Next step: Restart OpenCode\.$/)
   })
 })

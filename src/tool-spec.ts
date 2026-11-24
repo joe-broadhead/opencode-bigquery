@@ -49,7 +49,7 @@ export interface ToolSpec<I extends z.ZodType = z.ZodType, O extends z.ZodType =
   readonly name: string
   /** The permission action: `bigquery.<name>`. */
   readonly action: string
-  /** True when the tool changes nothing anywhere: the jelly declaration's `readOnly`. */
+  /** True when the tool changes nothing anywhere: the declaration's `readOnly`. */
   readonly readOnly: boolean
   /** What the tool can do, in the source contract's classes. Only `read` tools become tools RPC methods. */
   readonly class: MethodClass

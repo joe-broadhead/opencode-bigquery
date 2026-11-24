@@ -205,7 +205,7 @@ export async function commitPlan(name: CommitName, input: CommitInputOf, context
 
     const jobId = `oc_${context.ports.clock.uuid()}`
     const session = sessionHash(context.call.sessionID)
-    const labels = { oc_plugin: "opencode-bigquery", oc_tool: labelOf(`bigquery_${name}`), oc_session: session }
+    const labels = { oc_plugin: "bigquery-plugin", oc_tool: labelOf(`bigquery_${name}`), oc_session: session }
     const request: RunRequest = {
       account: context.account,
       project: prepared.project,

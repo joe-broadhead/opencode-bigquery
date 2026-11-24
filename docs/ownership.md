@@ -68,7 +68,6 @@ When A to F have landed, before the live check:
 | `docs/auth.md` | A |
 | `docs/configuration.md` | F |
 | `docs/scripting.md` | F |
-| `docs/jelly.md` | F |
 | `docs/costs.md` | F |
 | `docs/sql.md` | F |
 | `README.md` | F |
@@ -78,7 +77,6 @@ When A to F have landed, before the live check:
 | `src/index.ts` | Day 0 |
 | `src/plugin.ts` | Day 0 |
 | `src/wiring.ts` | Day 0 |
-| `src/unbuilt.ts` | Day 0 |
 | `src/registry.ts` | Day 0 |
 | `src/tool-spec.ts` | Day 0 |
 | `src/tools.ts` | Day 0 |
@@ -123,7 +121,6 @@ When A to F have landed, before the live check:
 | `test/unit/sources/**` | E |
 | `test/unit/status/**` | F |
 | `test/conformance/declaration.test.ts` | Day 0 |
-| `test/conformance/jelly-master.test.ts` | Day 0 |
 | `test/conformance/run/**` | E |
 | `test/host/harness.ts` | Day 0 |
 | `test/host/isolate.ts` | Day 0 |

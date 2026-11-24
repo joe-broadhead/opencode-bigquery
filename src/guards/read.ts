@@ -385,7 +385,7 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
 
   const timeoutSeconds = Math.max(1, Math.min(input.timeoutSeconds ?? context.options.jobTimeoutSeconds, 21_600))
   const jobId = `oc_${context.ports.clock.uuid()}`
-  const labels = { oc_plugin: "opencode-bigquery", oc_tool: labelOf(context.via), oc_session: session }
+  const labels = { oc_plugin: "bigquery-plugin", oc_tool: labelOf(context.via), oc_session: session }
   const limiter = limiterFor(context.ports.clock, context.account, context.options.maxConcurrentJobs)
 
   let status: JobStatus

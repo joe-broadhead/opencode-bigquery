@@ -80,7 +80,7 @@ describe("the key file", () => {
     expect(readKey(stateDir, "work", second.keyId)?.keyId).toBe(second.keyId)
   })
 
-  it("defaults to $XDG_STATE_HOME/opencode-bigquery, outside OpenCode's credential store", () => {
-    expect(stateDirOf({ XDG_STATE_HOME: "/invented/state" })).toBe(join("/invented/state", "opencode-bigquery"))
+  it("defaults to $XDG_STATE_HOME/bigquery-plugin, outside OpenCode's credential store", () => {
+    expect(stateDirOf({ XDG_STATE_HOME: "/invented/state" })).toBe(join("/invented/state", "bigquery-plugin"))
   })
 })

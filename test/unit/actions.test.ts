@@ -54,7 +54,7 @@ describe("the action table", () => {
     expect(Object.keys(SCHEMAS).sort()).toEqual(ACTIONS.map((entry) => entry.name).sort())
   })
 
-  it("keeps Jelly's notes to 200 characters", () => {
+  it("keeps the declaration's notes to 200 characters", () => {
     for (const entry of ACTIONS) expect((entry.note ?? "").length, entry.name).toBeLessThanOrEqual(200)
   })
 

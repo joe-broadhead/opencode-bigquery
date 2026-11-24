@@ -1,6 +1,6 @@
 /**
  * The spend ledger (design §6.2 item 4): every finished job's actual `totalBytesBilled`, one JSON line per job, in
- * `$XDG_STATE_HOME/opencode-bigquery/spend.jsonl`. Appends take a cross-process lock and write one line with a single
+ * `$XDG_STATE_HOME/bigquery-plugin/spend.jsonl`. Appends take a cross-process lock and write one line with a single
  * `append` of a newline-terminated record, so two OpenCode processes never interleave a line; a reader that meets a
  * torn last line (a process killed mid-write) ignores only that line.
  *

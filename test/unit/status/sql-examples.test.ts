@@ -7,7 +7,7 @@ import type { Token } from "../../../src/domain/lexer-api.js"
 import { informationSchemaRefs, lexText, significantTokens } from "../../../src/guards/lexer.js"
 import { harness, runTool, scriptNativeRead } from "../reads/support.js"
 
-const FILES = ["docs/sql.md", "skills/opencode-bigquery-sql/SKILL.md"]
+const FILES = ["docs/sql.md", "skills/bigquery-sql/SKILL.md"]
 const read = (file: string) => readFileSync(new URL(`../../../${file}`, import.meta.url), "utf8")
 
 /** A fenced `sql` block, at any indentation (the worked examples sit inside a list). */

@@ -49,7 +49,7 @@ export function createBigQueryPlugin(seam: BigQuerySeam) {
       try {
         keep(await registerPermissionDefaults(ctx, options.access, report("rules")))
         const tools = specs.filter(seam.isModelTool)
-        keep(await registerTools(ctx, { access: options.access, specs: tools, assert, report: report("tools") }))
+        keep(await registerTools(ctx, { specs: tools, assert, report: report("tools") }))
         keep(
           await registerStatus(ctx, {
             access: options.access,

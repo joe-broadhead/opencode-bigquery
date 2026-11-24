@@ -1,8 +1,8 @@
 ---
-name: opencode-bigquery-sql
+name: bigquery-sql
 description: GoogleSQL for BigQuery - partition filters, wildcards, QUALIFY, UNNEST, SAFE functions, APPROX aggregates, TABLESAMPLE, INFORMATION_SCHEMA and query parameters, with worked examples.
 ---
-If BigQuery's tools are absent, run `/connect` and choose BigQuery to sign in, or on Jelly call jelly_connection_request.
+If BigQuery's tools are absent, run `/connect` and choose BigQuery to sign in.
 
 # GoogleSQL
 

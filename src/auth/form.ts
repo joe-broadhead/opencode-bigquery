@@ -8,7 +8,7 @@
  *
  * Three hidden fields are for a host to fill, never shown: Google's client JSON (a Web application client's secret is
  * confidential, so it never appears in a paid field), and the redirect URI and callback port of a host that serves
- * OpenCode to a browser on another machine (Jelly's relay, design §3.2).
+ * OpenCode to a browser on another machine (an app's relay, design §3.2).
  */
 import { BigQueryError } from "../domain/errors.js"
 import { DISCLOSURE, type Level, scopesFor } from "../domain/levels.js"
@@ -47,7 +47,7 @@ export interface BooleanField extends FieldBase {
 export type SignInField = StringField | IntegerField | BooleanField
 export type SignInForm = readonly SignInField[]
 
-/** `bigquery-<alias>`: the integration Jelly's `signIns[0].integration` names and `/connect` shows. */
+/** `bigquery-<alias>`: the integration the package declaration's `signIns[0].integration` names and `/connect` shows. */
 export function integrationIdFor(alias: string): string {
   return `bigquery-${/^[a-z][a-z0-9-]*$/.test(alias) ? alias : "account"}`
 }

@@ -116,7 +116,7 @@ async function callback(url: string): Promise<{ readonly status: number; readonl
 }
 
 function stateDir(): string {
-  return join(process.env.XDG_STATE_HOME!, "opencode-bigquery")
+  return join(process.env.XDG_STATE_HOME!, "bigquery-plugin")
 }
 
 describe("package A in a host", () => {
@@ -198,7 +198,7 @@ describe("package A in a host", () => {
         access: "write",
         confirmWrite: true,
         clientJson,
-        // Jelly's relay fills these two hidden fields, as package.json's `signIns[0].relay` says.
+        // An app's relay fills these two hidden fields, as package.json's `signIns[0].relay` says.
         redirectUri: "https://relay.invalid/return",
         callbackPort: port,
       })

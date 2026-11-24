@@ -81,7 +81,7 @@ export const OptionsSchema = z
     oauthClient: OAuthClientSchema.optional(),
     redirectUri: z.string().min(1).optional(),
     callbackPort: z.number().int().min(1).max(65_535).optional(),
-    /** Hosted Jelly only: allow Application Default Credentials. */
+    /** A managed (hosted) engine only: allow Application Default Credentials. */
     allowAdcInHost: z.boolean().default(false),
     maxBytesBilled: bytes.default(10 * 2 ** 30),
     maxBytesCeiling: bytes.default(100 * 2 ** 30),
@@ -125,7 +125,7 @@ export function accountsOf(options: Pick<Options, "accounts">): Readonly<Record<
 /** The dataset id pattern, re-exported for the fence. */
 export { DATASET_ID }
 
-const EXAMPLE = `"plugins": [{ "package": "github:joe-broadhead/opencode-bigquery#v0.0.1", "options": { "access": "ask-changes" } }]`
+const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.0", "options": { "access": "ask-changes" } }]`
 
 export function loadOptions(raw: unknown): Options {
   const result = OptionsSchema.safeParse(raw ?? {})

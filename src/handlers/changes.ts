@@ -20,7 +20,7 @@ import { plan } from "../changes/plan.js"
 const plain = (value: string) => (/^[A-Za-z0-9_.:-]{1,64}$/.test(value) ? `\`${value}\`` : "`object`")
 
 /** The label every job this plugin starts carries (design §6.2 item 7). */
-const PLUGIN_LABEL = "opencode-bigquery"
+const PLUGIN_LABEL = "bigquery-plugin"
 /** The `oc_tool` labels of the plugin's read jobs: a Read account may cancel only these. */
 const READ_JOB_TOOLS = new Set(["bigquery_query", "bigquery_profile", "bigquery_table", "bigquery_search", "saved_read"])
 

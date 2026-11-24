@@ -1,26 +1,27 @@
 # Repository rules
 
-This repository builds `@joe-broadhead/opencode-bigquery`, an unofficial OpenCode plugin with its own tools over
-BigQuery's REST API v2: find datasets and tables, estimate and run read queries under a byte cap, save results to a
-file, and plan then commit changes. User docs: `README.md`, `docs/configuration.md`; contributor docs:
+This repository builds `@we-the-rebel-alliance/bigquery-plugin` (version `0.0.0`), an unofficial OpenCode plugin with
+its own tools over BigQuery's REST API v2: find datasets and tables, estimate and run read queries under a byte cap,
+save results to a file, and plan then commit changes. User docs: `README.md`, `docs/configuration.md`; contributor docs:
 `docs/architecture.md`, `CONTRIBUTING.md`.
 
 ## Platform
 
-- Use only public APIs of `@opencode/plugin` 2.2.3. The supported host range is exactly `>=2.2.3 <2.4.0`, in
+- Use only public APIs of `@opencode/plugin` 2.4.1. The supported host range is exactly `>=2.4.1 <2.5.0`, in
   `package.json` `opencode.host`, `SUPPORTED_HOST` in `src/constants.ts` and `HOST_RANGE` in `scripts/check.mjs`.
-  Never write it as `^2.2.3`.
-- Test against stock OpenCode 2.2.3, 2.2.4, 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.1 and 2.3.2. `TESTED_HOSTS` in
-  `src/constants.ts` is the one list.
+  Never write it as `^2.4.1`.
+- Test against stock OpenCode 2.4.1 only. `TESTED_HOSTS` in `src/constants.ts` is the one list.
 - Keep the plugin ids `google-cloud.bigquery` (server and status RPC), `google-cloud.bigquery.tools` (tools RPC, named
   by the `sources` block) and `google-cloud.bigquery.tui` (TUI), and the namespace `bigquery`.
+- `sources` and `jelly` in `package.json`, the copied kit scripts under `scripts/` and `test/support/jelly-*.ts` are
+  retained for the contract rebuild that replaces them; do not add new behaviour to them.
 
 ## Forbidden
 
 `npm run lint` (`scripts/check-forbidden.mjs`) runs its self-test, then scans `src/`, `test/`, `scripts/` and `dist/`.
 Do not use the V1 packages under `@opencode-ai/`, `ctx.generate.*`, `experimental.policies`,
 `ctx.experimental.artifact`, imports of `@opencode/ai` or of private OpenCode source, machine-local paths, or
-`ctx.permission.hook` anywhere but once in `dist/index.js` (the source contract's tools RPC).
+`ctx.permission.hook` anywhere.
 
 ## BigQuery
 
@@ -39,8 +40,8 @@ Do not use the V1 packages under `@opencode-ai/`, `ctx.generate.*`, `experimenta
 
 - Permission defaults go through `ctx.agent.transform`, right after each agent's base `* * allow`. No permission hook
   decides them. User rules and saved approvals keep winning.
-- Every tool asserts its declared action (`bigquery.<tool>`); the actions, their read-only flags and the jelly
-  declaration come from one table (`src/domain/actions.ts`), and a test keeps them equal.
+- Every tool asserts its declared action (`bigquery.<tool>`); the actions and their read-only flags come from one table
+  (`src/domain/actions.ts`), and a test keeps them equal.
 - Transforms are synchronous and never throw.
 - The plugin's own errors are `BigQueryError(code, detail, next?)`, from the one table in `src/domain/errors.ts`.
 - `dist/` holds exactly two self-contained bundles, `index.js` and `tui.js`.

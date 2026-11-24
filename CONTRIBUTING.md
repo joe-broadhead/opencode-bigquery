@@ -7,8 +7,8 @@
 - macOS or Linux.
 
 ```sh
-git clone https://github.com/joe-broadhead/opencode-bigquery.git
-cd opencode-bigquery
+git clone https://github.com/we-the-rebel-alliance/bigquery-plugin.git
+cd bigquery-plugin
 npm ci --ignore-scripts
 npm run check
 ```
@@ -24,7 +24,7 @@ npm run build
 ```
 
 ```json
-{ "plugins": [{ "package": "/path/to/opencode-bigquery" }] }
+{ "plugins": [{ "package": "/path/to/bigquery-plugin" }] }
 ```
 
 ## `npm run check`
@@ -40,12 +40,12 @@ One command, `scripts/check.mjs`, runs every stage in order and stops at the fir
 | `kit` | The release kit's own tests. |
 | `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
 | `icons` | The family icon contract. |
-| `host` | The built plugin in an embedded OpenCode host, once per tested release, with every request off loopback blocked. |
+| `host` | The built plugin in an embedded OpenCode 2.4.1 host, with every request off loopback blocked. |
 | `pack` | Packs, installs with scripts disabled and imports both entries. |
 | `forbidden` | The forbidden APIs and private names. |
 | `copies` | The shared kit files against their pinned hashes. |
 | `whitelist` | `package.json` and `dist/` against the approved package shape. |
-| `actionlint` | The workflows, when `actionlint` is on PATH. |
+| `actionlint` | The workflows, when `actionlint` is on PATH (CI installs it). |
 
 ## Releases
 
@@ -57,5 +57,5 @@ Each release is the GitHub tag `v<version>`, made only by `.github/workflows/rel
 `release` environment. While changes land, their notes go under `## [Unreleased]` in `CHANGELOG.md`; a release-prep
 commit runs `node scripts/changelog.mjs release`. `package.json` stays `"private": true` and in canonical form.
 
-A pull request's CI runs the Linux runners only; the push to `master` runs every runner, Apple-silicon macOS
-(`macos-26`) too, and the release stands on that run. An Intel Mac (`macos-26-intel`) is not required.
+A pull request's CI runs the one `ci` job on Node 24 with `ubuntu-24.04`. The release workflow runs its own checks on
+the release commit before the owner approves it.

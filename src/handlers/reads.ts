@@ -728,7 +728,7 @@ async function jobTables(context: HandlerContext, status: JobStatus): Promise<{ 
 /** Record a finished job this plugin started, by jobId; the ledger ignores a job it already holds (review M-1). */
 async function recordFinishedJob(context: HandlerContext, status: JobStatus): Promise<void> {
   const labels = status.labels ?? {}
-  if (labels.oc_plugin !== "opencode-bigquery" || status.state !== "DONE") return
+  if (labels.oc_plugin !== "bigquery-plugin" || status.state !== "DONE") return
   const billed = status.totalBytesBilled ?? 0
   if (billed <= 0) return
   const via = /^[a-z0-9_-]{1,63}$/.test(labels.oc_tool ?? "") ? labels.oc_tool! : "bigquery_job"

@@ -31,7 +31,7 @@ export function scopesFor(level: Level): readonly string[] {
   return level === "write" ? [...base, SCOPES.writeMarker] : base
 }
 
-/** Every scope either level requests, sorted: what Jelly's `signIns[0].scopes` lists and its Google client allows. */
+/** Every scope either level requests, sorted: what the package declaration's sign-in lists and its Google client allows. */
 export const ALL_SCOPES: readonly string[] = [...new Set([...scopesFor("read"), ...scopesFor("write")])].sort()
 
 /**
@@ -129,8 +129,8 @@ export function headlessLevelProblem(mode: Mode, level: Level | undefined): stri
 }
 
 /**
- * The disclosure, verbatim on the form under Read, in the jelly account description, the README's Security section,
- * docs/auth.md and status. The unbound form drops the key file, because then the credential store alone is enough.
+ * The disclosure, verbatim on the form under Read, in the package declaration's account description, the README's
+ * Security section, docs/auth.md and status. The unbound form drops the key file, because then the credential store alone is enough.
  */
 export const DISCLOSURE = {
   bound:

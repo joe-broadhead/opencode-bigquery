@@ -27,9 +27,9 @@ export interface DpopKey {
   readonly jwk: PublicJwk & { readonly d: string }
 }
 
-/** The plugin's own state folder, as `src/wiring.ts` names it: `$XDG_STATE_HOME/opencode-bigquery`. */
+/** The plugin's own state folder, as `src/wiring.ts` names it: `$XDG_STATE_HOME/bigquery-plugin`. */
 export function stateDirOf(env: NodeJS.ProcessEnv = process.env): string {
-  return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "opencode-bigquery")
+  return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "bigquery-plugin")
 }
 
 /** The folder the DPoP keys live in. Outside OpenCode's credential store, as the disclosure says. */
