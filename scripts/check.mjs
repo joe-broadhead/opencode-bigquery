@@ -33,9 +33,8 @@ const stages = {
   // The source contract's declaration checks over the `sources` block in package.json, under Bun. The conformance kit's
   // full run over the methods (paging, gaps, refusals) joins it with the sources package.
   conformance: () => run("bun", ["test", "./test/conformance"]),
-  // The copied release kit's own tests. Its one CI assertion pins the old macOS matrix, which the single `ci` job
-  // replaces (the plugin standard's runner rule); it is excluded here until 4b replaces the kit.
-  kit: () => run("node", ["--test", "scripts/release-kit.test.mjs"], { env: { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --test-skip-pattern=this.repository.s.ci.yml`.trim() } }),
+  // The copied release kit's own tests.
+  kit: () => run("node", ["--test", "scripts/release-kit.test.mjs"]),
   build: () => run("node", ["scripts/build.mjs"]),
   icons: () => run("node", ["scripts/check-icons.mjs"]),
   host: host,

@@ -1974,11 +1974,16 @@ describe("CI: macOS on pushes to master and for releases, never on pull requests
     assert.deepEqual(ciJobsProblems(undefined, ["macos-26"]), ["no successful job on macos-26"])
   })
 
-  test("this repository's ci.yml: a pull request's matrix has no macOS entry, and a master push's does (npm run check)", () => {
-    const matrix = ciMatrix(readFileSync(join(SCRIPTS, "..", ".github", "workflows", "ci.yml"), "utf8"))
-    assert.deepEqual(matrix.problems, [])
-    assert.equal(matrix.pullRequest.some((runner) => /^macos-/.test(runner)), false)
-    assert.ok(matrix.push.includes("macos-26"), `a push to master runs ${matrix.push.join(", ")}`)
+  // Phase 4a's CI is one `ci` job on the plugin standard's runner rule, so the copied kit's macOS-matrix rule above no
+  // longer applies to this repository. 4b replaces the kit; this repository-specific assertion checks the shape instead.
+  test("this repository's ci.yml: one required ci job on the public runner rule (npm run check)", () => {
+    const file = readFileSync(join(SCRIPTS, "..", ".github", "workflows", "ci.yml"), "utf8")
+    const jobs = [...file.slice(file.indexOf("\njobs:")).matchAll(/^ {2}([a-z][\w-]*):$/gm)].map((match) => match[1])
+    assert.deepEqual(jobs, ["ci"])
+    assert.match(file, /^    name: ci$/m)
+    assert.ok(file.includes("runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNNER_PUBLIC || 'ubuntu-24.04') || 'ubuntu-24.04' }}"))
+    assert.match(file, /node-version: 24/)
+    assert.match(file, /npm run check/)
   })
 })
 
