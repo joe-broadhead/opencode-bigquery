@@ -14,7 +14,7 @@ import { guardGoogleFetch, isTaggedRelease, NOT_RELEASED_DETAIL, NOT_RELEASED_NE
 
 /** The plugin's own state folder: the DPoP keys (0700) and the spend ledger. */
 export function stateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "opencode-bigquery")
+  return join(env.XDG_STATE_HOME || join(homedir(), ".local", "state"), "bigquery-plugin")
 }
 
 export function createPorts(options: Options, released: () => Promise<boolean> = async () => isTaggedRelease()): Ports {

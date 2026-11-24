@@ -8,7 +8,7 @@ build each part, and the files each owns, are in [File ownership](ownership.md).
 
 | Module | What it fixes |
 | --- | --- |
-| `src/domain/actions.ts` | The one action table: 19 tools and 2 method-only reads, each with its action `bigquery.<name>`, read-only flag, class, operation and owner; the run-time ask `bigquery.uncapped_read`; which tool commits which plan category. The default rules, the jelly declaration, the registry and the tools RPC all come from it. |
+| `src/domain/actions.ts` | The one action table: 19 tools and 2 method-only reads, each with its action `bigquery.<name>`, read-only flag, class, operation and owner; the run-time ask `bigquery.uncapped_read`; which tool commits which plan category. The default rules, the package declaration, the registry and the tools RPC all come from it. |
 | `src/domain/contract.ts` | Every tool's input and output schema, and the result envelope: `state`, `error`, `message`, `next`, `reason`, `googleError` (Google's text, untrusted), `warnings`. |
 | `src/domain/errors.ts` | The one error table, with each code's state and owning package, the warnings, and the source contract's code for each. |
 | `src/domain/statements.ts` | Every `statementType` in Google's enum (`test/fixtures/statement-types.json`, read by `scripts/statement-types.mjs`) mapped to a kind; `raise` never lowers a decision. |
@@ -26,7 +26,7 @@ build each part, and the files each owns, are in [File ownership](ownership.md).
 | --- | --- |
 | `src/index.ts`, `src/plugin.ts` | The server part: `Plugin.define` with the id `google-cloud.bigquery`, set up in opencode-github's order. |
 | `src/registry.ts` | One spec per action-table entry, with its schemas and its package's handler (`src/handlers/*`), or `NOT_BUILT`. It resolves the account, asserts a read's own action before its handler, hands the handler ports that refuse any request before that assert, refuses an undeclared assert, refuses an uncapped-read plan from a script, and turns a refusal into the envelope. |
-| `src/wiring.ts`, `src/unbuilt.ts` | The ports the plugin runs with; each package replaces its unbuilt port. |
+| `src/wiring.ts` | The ports the plugin runs with, and their state folder. |
 | `src/permissions.ts` | The default rules from the action table, inserted after each agent's base allow. |
 | `src/tool-spec.ts`, `src/tools.ts` | A spec as the model's tool and as a tools RPC method; the namespace and the tools' registration. |
 | `src/host/script-methods.ts` | The tools RPC's plugin value and its methods (the reads), for the source contract's `tools-rpc`. |

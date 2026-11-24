@@ -56,7 +56,7 @@ export async function computeStatus(ctx: StatusContext, deps: StatusDeps): Promi
       problemStep(problems) ??
       (unguarded.length > 0 ? AGENT_STEP : undefined) ??
       skillStep(shadowed) ??
-      (deps.hostWarning ? `If ${DISPLAY_NAME} misbehaves, use OpenCode ${TESTED_HOSTS.slice(0, -1).join(", ")} or ${TESTED_HOSTS.at(-1)}, where it is tested.` : undefined) ??
+      (deps.hostWarning ? `If ${DISPLAY_NAME} misbehaves, use OpenCode ${testedHostsText()}, where it is tested.` : undefined) ??
       NOTHING_TO_DO,
   }
 }
@@ -109,6 +109,12 @@ async function detailRows(options: Options | undefined): Promise<StatusRow[] | u
     // The ledger is a local file; a status that cannot read it still says what it knows.
   }
   return rows
+}
+
+/** The tested releases as prose: one, or a list with "or" before the last. */
+function testedHostsText(): string {
+  if (TESTED_HOSTS.length === 1) return TESTED_HOSTS[0]!
+  return `${TESTED_HOSTS.slice(0, -1).join(", ")} or ${TESTED_HOSTS.at(-1)}`
 }
 
 /** The first registration problem's own next step. */

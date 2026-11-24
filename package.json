@@ -1,6 +1,6 @@
 {
-  "name": "@joe-broadhead/opencode-bigquery",
-  "version": "0.0.1",
+  "name": "@we-the-rebel-alliance/bigquery-plugin",
+  "version": "0.0.0",
   "private": true,
   "description": "Unofficial OpenCode plugin for Google BigQuery",
   "keywords": [
@@ -9,13 +9,13 @@
     "bigquery",
     "google-cloud"
   ],
-  "homepage": "https://github.com/joe-broadhead/opencode-bigquery#readme",
+  "homepage": "https://github.com/we-the-rebel-alliance/bigquery-plugin#readme",
   "bugs": {
-    "url": "https://github.com/joe-broadhead/opencode-bigquery/issues"
+    "url": "https://github.com/we-the-rebel-alliance/bigquery-plugin/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joe-broadhead/opencode-bigquery.git"
+    "url": "git+https://github.com/we-the-rebel-alliance/bigquery-plugin.git"
   },
   "license": "MIT",
   "type": "module",
@@ -57,9 +57,9 @@
   "devDependencies": {
     "@babel/core": "7.29.7",
     "@babel/preset-typescript": "7.27.1",
-    "@opencode/client": "2.2.3",
-    "@opencode/plugin": "2.2.3",
-    "@opencode/sdk": "2.2.3",
+    "@opencode/client": "2.4.1",
+    "@opencode/plugin": "2.4.1",
+    "@opencode/sdk": "2.4.1",
     "@opentui/core": "0.8.0",
     "@opentui/solid": "0.8.0",
     "@types/bun": "1.4.4",
@@ -67,6 +67,7 @@
     "@we-the-rebel-alliance/source-contract": "github:we-the-rebel-alliance/source-contract#v0.3.0",
     "babel-preset-solid": "1.9.16",
     "esbuild": "0.28.2",
+    "effect": "4.1.0",
     "google-auth-library": "11.3.4",
     "solid-js": "1.9.18",
     "typescript": "5.9.3",
@@ -74,7 +75,7 @@
     "zod": "4.6.7"
   },
   "opencode": {
-    "host": ">=2.2.3 <2.4.0",
+    "host": ">=2.4.1 <2.5.0",
     "icons": [
       {
         "src": "assets/icon.svg",
@@ -252,8 +253,8 @@
       }
     ],
     "skills": [
-      "opencode-bigquery",
-      "opencode-bigquery-sql"
+      "bigquery",
+      "bigquery-sql"
     ],
     "asks": [
       "bigquery.uncapped_read"

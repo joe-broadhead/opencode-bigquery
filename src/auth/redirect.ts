@@ -2,7 +2,7 @@
  * The OAuth redirect of one sign-in (design §3.2, L14).
  *
  * By default Google sends the browser to `http://127.0.0.1:<random port>`, which works only when the browser runs on
- * the same machine as OpenCode. A host that serves OpenCode to a browser elsewhere, Jelly included, supplies
+ * the same machine as OpenCode. A host that serves OpenCode to a browser elsewhere, an app included, supplies
  * `redirectUri` (the public address Google redirects to) and `callbackPort` (where that address reaches this machine's
  * listener), through the form's hidden fields or the plugin options. Google accepts only loopback redirects for a
  * Desktop app client and matches a Web application client's redirect exactly, so both are checked before the browser

@@ -27,7 +27,7 @@ interface ErrorEntry {
 export const ErrorCode = {
   // ── Setup ─────────────────────────────────────────────────────────────
   HOST_UNTESTED: {
-    meaning: "The OpenCode version is outside the supported range (>=2.2.3 <2.4.0).",
+    meaning: "The OpenCode version is outside the supported range (>=2.4.1 <2.5.0).",
     next: "Update OpenCode or the plugin, or set the plugin option allowUntestedHost: true.",
     state: "setup",
     owner: "day0",
@@ -129,8 +129,8 @@ export const ErrorCode = {
     owner: "A",
   },
   ADC_REFUSED: {
-    meaning: "Application Default Credentials are refused in hosted Jelly unless allowAdcInHost is set.",
-    next: "Use an interactive account, or ask the host's owner to set allowAdcInHost.",
+    meaning: "Application Default Credentials are refused in a managed (hosted) engine unless allowAdcInHost is set.",
+    next: "Use an interactive account, or ask the host's operator to set allowAdcInHost.",
     state: "refused",
     owner: "A",
   },

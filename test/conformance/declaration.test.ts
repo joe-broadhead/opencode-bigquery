@@ -52,9 +52,9 @@ test("names only read operations, as the resolvers do", () => {
 })
 
 /**
- * Keys source-contract v0.1.x consumers (Jelly and Memory today) refuse outright. The family holds them until those
- * consumers re-vendor v0.2.0 (jelly #5910); this test keeps one from coming back by accident. Delete an entry here only
- * when that lands, and say so in the CHANGELOG.
+ * Keys source-contract v0.1.x consumers refuse outright. The plugin holds them until those consumers re-vendor
+ * v0.2.0; this test keeps one from coming back by accident. Delete an entry here only when that lands, and say so in
+ * the CHANGELOG.
  */
 const HELD_ANYWHERE = ["removals", "identityRules", "readsIdentity", "verified", "conditions", "min"] as const
 

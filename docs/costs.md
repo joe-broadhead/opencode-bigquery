@@ -66,13 +66,13 @@ bound is up to one cap per statement.
 Budgets are opt-in, in bytes billed, over a local day and/or the session:
 
 ```json
-{ "plugins": [{ "package": "github:joe-broadhead/opencode-bigquery#v0.0.1", "options": { "budget": { "daily": "5GiB", "action": "refuse" } } }] }
+{ "plugins": [{ "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.0", "options": { "budget": { "daily": "5GiB", "action": "refuse" } } }] }
 ```
 
 `action: "refuse"` answers `BUDGET_REACHED` before a call starts once the budget is spent; `"warn"` lets the call run
 and says how much is left. Under either action the plugin adds `BUDGET_WARN` once 10 % or less of the budget is left.
 The bytes come from each finished job's actual `totalBytesBilled`, recorded in
-`$XDG_STATE_HOME/opencode-bigquery/spend.jsonl` (local days, one line per job, no session id — a hash).
+`$XDG_STATE_HOME/bigquery-plugin/spend.jsonl` (local days, one line per job, no session id — a hash).
 `bigquery_status` and `/bigquery-status` show today's bytes and dollars.
 
 A job nothing polls is not in the ledger, and the reconciliation with Google's `INFORMATION_SCHEMA.JOBS_BY_USER` is not

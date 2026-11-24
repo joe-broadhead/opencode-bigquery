@@ -180,7 +180,7 @@ export function statistics(overrides: Partial<DryRunStatistics> = {}): DryRunSta
 /** A job this plugin started: the `oc_` id and the server-side label the cancel ownership check requires. */
 export function pluginJob(overrides: Partial<JobStatus> = {}): JobStatus {
   return jobStatus({
-    labels: { oc_plugin: "opencode-bigquery", oc_tool: "bigquery_query", oc_session: "0123456789abcdef" },
+    labels: { oc_plugin: "bigquery-plugin", oc_tool: "bigquery_query", oc_session: "0123456789abcdef" },
     ...overrides,
   })
 }

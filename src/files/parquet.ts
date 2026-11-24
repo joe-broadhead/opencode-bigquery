@@ -330,7 +330,7 @@ export class ParquetWriter {
             ],
           })),
         ),
-        binary(6, "opencode-bigquery"),
+        binary(6, "bigquery-plugin"),
       ],
     }
     const footer = structBytes(file)

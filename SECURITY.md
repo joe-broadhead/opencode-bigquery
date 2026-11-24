@@ -27,7 +27,7 @@ request to Google's OAuth token endpoint) and runs the free IAM check once after
 
 The plugin keeps no secret in its options. An interactive sign-in's refresh token is OpenCode's to store; access tokens
 stay in memory and are never written. The DPoP key that binds the refresh token to this device is the plugin's own file,
-`$XDG_STATE_HOME/opencode-bigquery/keys/<alias>.jwk`, mode 0600 in a 0700 folder.
+`$XDG_STATE_HOME/bigquery-plugin/keys/<alias>.jwk`, mode 0600 in a 0700 folder.
 
 The plugin never calls Google's token revocation endpoint. Google revokes every token of the OAuth client's project at
 once, which would sign you out of other apps on the same client; replacing a sign-in and signing out are local instead.
@@ -41,7 +41,7 @@ instructions. A `message` and a `next` step are built from codes and validated i
 
 ### Spend ledger
 
-`$XDG_STATE_HOME/opencode-bigquery/spend.jsonl` holds one line per finished job: the time, the account, the project and
+`$XDG_STATE_HOME/bigquery-plugin/spend.jsonl` holds one line per finished job: the time, the account, the project and
 location, the job id, the bytes billed, the tool and a hash of the session id. It never holds a row, a token or a
 session id.
 

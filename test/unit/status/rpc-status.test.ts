@@ -11,7 +11,7 @@ import { computeStatus, type StatusDeps } from "../../../src/status.js"
 /** The parsed options the plugin passes to `registerStatus` (and so to `computeStatus`). */
 const deps = (options?: StatusDeps["options"]): StatusDeps => ({
   access: "all",
-  hostVersion: "2.2.3",
+  hostVersion: "2.4.1",
   tools: () => ({ registered: 19, notBuilt: 1 }),
   skills: [],
   problems: () => [],
@@ -42,9 +42,9 @@ describe("the status the command and the TUI read", () => {
   it("adds BigQuery's accounts, fence, caps and the day's billed bytes from the ledger, and nothing off the machine", async () => {
     const state = tempState()
     process.env.XDG_STATE_HOME = state
-    mkdirSync(join(state, "opencode-bigquery"), { recursive: true })
+    mkdirSync(join(state, "bigquery-plugin"), { recursive: true })
     writeFileSync(
-      join(state, "opencode-bigquery", "spend.jsonl"),
+      join(state, "bigquery-plugin", "spend.jsonl"),
       `${JSON.stringify({ at: new Date().toISOString(), account: "default", project: "invented-proj", location: "US", jobId: "oc_one", bytesBilled: 2 ** 30, via: "bigquery_query", session: "0123456789abcdef" })}\n`,
     )
     const options = loadOptions({
@@ -74,7 +74,7 @@ describe("the status the command and the TUI read", () => {
   })
 
   it("rejects a details row that is not a label and a value", () => {
-    const base = { version: "0.0.1", access: "all", tools: { registered: 19, notBuilt: 1 }, unguardedAgents: [], host: { version: "2.2.3", range: ">=2.2.3 <2.4.0", tested: true }, nextStep: "Nothing to do." }
+    const base = { version: "0.0.0", access: "all", tools: { registered: 19, notBuilt: 1 }, unguardedAgents: [], host: { version: "2.4.1", range: ">=2.4.1 <2.5.0", tested: true }, nextStep: "Nothing to do." }
     expect(isStatus({ ...base, details: [{ label: "Accounts", value: "default" }] })).toBe(true)
     expect(isStatus({ ...base, details: [{ label: "Accounts" }] })).toBe(false)
     expect(isStatus({ ...base, details: [{ label: "Accounts", value: "default", extra: true }] })).toBe(false)

@@ -7,8 +7,8 @@
  * `gcloud auth application-default login --scopes=…` command.
  *
  * ADC is never a fallback: an account is `adc` only when its options say so. A managed (hosted) engine refuses it
- * unless `allowAdcInHost` is set (`ADC_REFUSED`). The signal for "managed" is the family's: Jelly's agent runtime sets
- * `OPENCODE_DISABLE_PROJECT_CONFIG=1` (or the older `OPENCODE_CONFIG_PROJECT_DISABLE=1`) for its managed engines.
+ * unless `allowAdcInHost` is set (`ADC_REFUSED`). The signal for "managed" is OpenCode's: a managed engine sets
+ * `OPENCODE_DISABLE_PROJECT_CONFIG=1` (or the older `OPENCODE_CONFIG_PROJECT_DISABLE=1`).
  */
 import { BigQueryError } from "../domain/errors.js"
 import { SCOPES } from "../domain/levels.js"

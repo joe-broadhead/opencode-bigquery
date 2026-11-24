@@ -1,9 +1,9 @@
 /**
  * The one table of what the plugin asserts: every tool's action, every tools RPC method's action and every run-time
- * ask. The registry (`src/registry.ts`), the default rules (`src/permissions.ts`), the jelly declaration and the
+ * ask. The registry (`src/registry.ts`), the default rules (`src/permissions.ts`), the package declaration and the
  * tools RPC all come from it, and tests keep them equal: an action the plugin asserts is an action it declares, and a
- * read is declared read-only, so Jelly's Read only lets it run (an undeclared read would fall under the namespace's
- * deny there).
+ * read is declared read-only, so an access level that allows reads lets it run (an undeclared read would fall under
+ * the namespace's change effect).
  *
  * Actions are `bigquery.<name>`; the model sees the tool `bigquery_<name>`. Operations name Google's REST methods,
  * with one stated exception: a verified read query job is `bigquery.jobs.query`, whether `jobs.query` or
@@ -29,9 +29,9 @@ export interface ActionEntry {
   readonly name: string
   /** The permission action: `bigquery.<name>`. */
   readonly action: string
-  /** `tool`: a model tool (and, for a read, a method). `method`: a tools RPC method only, declared for Jelly's rules. */
+  /** `tool`: a model tool (and, for a read, a method). `method`: a tools RPC method only, declared for the permission rules. */
   readonly kind: "tool" | "method"
-  /** True when it changes nothing anywhere: Jelly's `readOnly`, and allowed by every access. */
+  /** True when it changes nothing anywhere: the declaration's `readOnly`, and allowed at every access. */
   readonly readOnly: boolean
   readonly class: ActionClass
   /**
@@ -47,7 +47,7 @@ export interface ActionEntry {
   /** Whether "Always" may be saved for its asks; `false` asks every time (delete). */
   readonly savable?: boolean
   readonly owner: Package
-  /** Jelly's note on the tool (at most 200 characters), where the name alone does not say enough. */
+  /** The declaration's note on the tool (at most 200 characters), where the name alone does not say enough. */
   readonly note?: string
 }
 
@@ -66,7 +66,7 @@ export const ACTIONS: readonly ActionEntry[] = [
     class: "read",
     operation: "bigquery.jobs.query",
     owner: "C",
-    // Jelly's card. Under Allowed, Jelly runs a declared ask without asking (its D165), and this plugin accepts that.
+    // The card's note: whether this ask prompts is the access rules' decision.
     note: "Runs SELECT and ASSERT under a byte cap. One the cap cannot bound runs from a plan: under Allowed without asking, limited to 120 seconds and your budget if set; otherwise you are asked first",
   }),
   entry("job", { kind: "tool", readOnly: true, class: "read", operation: "bigquery.jobs.get", owner: "C" }),
@@ -138,7 +138,7 @@ export const PERMISSION_ONLY: readonly { readonly action: string; readonly readO
 /** The source contract's per-operation read action (contract L1). */
 export const SOURCE_READ = PERMISSION_ONLY[0]!.action
 
-/** The run-time asks: actions a tool asserts at run time, declared in jelly `asks`. Whether one asks is the rules'. */
+/** The run-time asks: actions a tool asserts at run time, declared in the package's `asks`. Whether one asks is the rules'. */
 export const ASKS = {
   /** `bigquery_query({ planId })` asserts it before running a read the byte cap cannot bound. */
   uncappedRead: `${NAMESPACE}.uncapped_read`,

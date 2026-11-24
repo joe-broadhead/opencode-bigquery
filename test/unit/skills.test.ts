@@ -6,7 +6,7 @@ const text = (id: string) => readFileSync(new URL(`../../skills/${id}/SKILL.md`,
 
 describe("skills", () => {
   it("are the main skill and the SQL skill", () => {
-    expect([...SKILL_IDS]).toEqual(["opencode-bigquery", "opencode-bigquery-sql"])
+    expect([...SKILL_IDS]).toEqual(["bigquery", "bigquery-sql"])
   })
 
   for (const id of SKILL_IDS) {
@@ -14,11 +14,12 @@ describe("skills", () => {
       const skill = parseSkill(id, text(id))
       expect(skill.name).toBe(id)
       expect(skill.description.length).toBeGreaterThan(40)
-      expect(skill.content.split("\n")[0]).toMatch(/^If BigQuery's tools are absent, run `\/connect` .*, or on Jelly call jelly_connection_request\.$/)
+      expect(skill.description.length).toBeLessThanOrEqual(300)
+      expect(skill.content.split("\n")[0]).toBe("If BigQuery's tools are absent, run `/connect` and choose BigQuery to sign in.")
     })
   }
 
   it("refuses a skill with an unknown frontmatter key", () => {
-    expect(() => parseSkill("opencode-bigquery", "---\nname: opencode-bigquery\ndescription: x\nextra: y\n---\nbody")).toThrow(/^SKILLS_INVALID: /)
+    expect(() => parseSkill("bigquery", "---\nname: bigquery\ndescription: x\nextra: y\n---\nbody")).toThrow(/^SKILLS_INVALID: /)
   })
 })

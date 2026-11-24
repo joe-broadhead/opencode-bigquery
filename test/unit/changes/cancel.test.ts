@@ -30,7 +30,7 @@ describe("bigquery_cancel", () => {
 
   it("cancels the plugin's own write job on a Read and write account", async () => {
     const h = harness(signedIn())
-    h.bigquery.on("getJob", async () => pluginJob({ ref: REF, state: "RUNNING", totalBytesBilled: 0, labels: { oc_plugin: "opencode-bigquery", oc_tool: "bigquery_write" } }))
+    h.bigquery.on("getJob", async () => pluginJob({ ref: REF, state: "RUNNING", totalBytesBilled: 0, labels: { oc_plugin: "bigquery-plugin", oc_tool: "bigquery_write" } }))
     h.bigquery.on("cancel", async () => pluginJob({ ref: REF, state: "RUNNING", totalBytesBilled: 0 }))
     expect((await runTool(h, "cancel", { project: PROJECT, jobId: JOB_ID, location: LOCATION })).output).toMatchObject({ state: "cancelled" })
   })
@@ -52,7 +52,7 @@ describe("bigquery_cancel", () => {
 
   it("refuses a plugin write job on a Read account, before any cancel", async () => {
     const h = harness(readOnly())
-    h.bigquery.on("getJob", async () => pluginJob({ ref: REF, state: "RUNNING", totalBytesBilled: 0, labels: { oc_plugin: "opencode-bigquery", oc_tool: "bigquery_delete" } }))
+    h.bigquery.on("getJob", async () => pluginJob({ ref: REF, state: "RUNNING", totalBytesBilled: 0, labels: { oc_plugin: "bigquery-plugin", oc_tool: "bigquery_delete" } }))
     const { output } = await runTool(h, "cancel", { project: PROJECT, jobId: JOB_ID, location: LOCATION })
     expect(output).toMatchObject({ state: "refused", error: "PERMISSION_DENIED" })
     expect(String(output.message)).toContain("cancels only this plugin's read jobs")

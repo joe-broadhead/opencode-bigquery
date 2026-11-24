@@ -7,7 +7,7 @@ The plugin works without options. Set them on its entry in `opencode.json`:
 ```json
 {
   "plugins": [
-    { "package": "github:joe-broadhead/opencode-bigquery#v0.0.1", "options": { "access": "ask-changes" } }
+    { "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.0", "options": { "access": "ask-changes" } }
   ]
 }
 ```
@@ -25,7 +25,7 @@ The options are the contract's (design §12). Every one is optional; the default
 | `accounts` | object: alias → account | one `default` interactive account | The Google accounts; see [Accounts](#accounts). |
 | `oauthClient` | `{ clientId, clientSecret? }` or Google's client JSON | none | The Desktop OAuth client, for every interactive account without its own. |
 | `redirectUri`, `callbackPort` | string, integer | none | A relay's redirect; `redirectUri` needs `callbackPort`. |
-| `allowAdcInHost` | boolean | `false` | Hosted Jelly only: allow Application Default Credentials. |
+| `allowAdcInHost` | boolean | `false` | A managed (hosted) engine only: allow Application Default Credentials. |
 | `maxBytesBilled` | bytes or a size such as `"10GiB"` | `"10GiB"` | The byte cap every job carries unless a call passes a lower or higher one. |
 | `maxBytesCeiling` | bytes or a size | `"100GiB"` | The highest cap a call may ask for. |
 | `budget` | `{ daily?, session?, action }` | none | An opt-in budget in bytes billed; `action` is `refuse` (default) or `warn`. Either action adds `BUDGET_WARN` when 10 % or less of the budget is left; `warn` also lets a call run once the budget is spent, where `refuse` blocks it. |
@@ -36,12 +36,15 @@ The options are the contract's (design §12). Every one is optional; the default
 | `jobTimeoutSeconds`, `uncappedTimeoutSeconds` | integer | `600`, `120` | Job time limits; the second for reads the cap cannot bound. |
 | `maxConcurrentJobs` | integer | `4` | Running jobs per account. |
 | `scripts` | boolean | `true` | Whether a multi-statement script may be planned. |
-| `uncappedReads` | `"ask"` or `"refuse"` | `"ask"` | Whether a read the byte cap cannot bound may run from a plan. With `"ask"` the plugin asserts `bigquery.uncapped_read`: the default rules below ask at `all` and `ask-changes` and deny at `read-only`; in Jelly, Allowed runs it without asking. `"refuse"` never runs one. |
+| `uncappedReads` | `"ask"` or `"refuse"` | `"ask"` | Whether a read the byte cap cannot bound may run from a plan. With `"ask"` the plugin asserts `bigquery.uncapped_read`: the default rules below ask at `all` and `ask-changes` and deny at `read-only`. `"refuse"` never runs one. |
 | `policyTagged` | `"withhold"` or `"allow"` | `"withhold"` | Whether values of policy-tagged columns may reach the model. A query over **any** table with a tagged column returns no rows inline while this is `"withhold"`, because BigQuery's dry run names the tables a query reads but not its columns; the result is save-only instead ([Job resource](https://cloud.google.com/bigquery/docs/reference/rest/v2/Job)). |
 | `savedQueries` | object: name → `{ sql, project?, location?, maxBytes?, allowUncached? }` | `{}` | The queries the `bigquery.saved` source may run. On-demand pricing, about $6.25 per TiB billed; at most 1 GiB billed per read unless you raise it (`maxBytes`); cached reads are free. |
 | `planTtlSeconds` | integer | `300` | How long a plan can be committed. |
 | `admin` | `{ enabled, requireReason }` | both `true` | Admin plans. |
-| `allowUntestedHost` | boolean | `false` | Load on an OpenCode release outside `>=2.2.3 <2.4.0`, with a warning in status. |
+| `allowUntestedHost` | boolean | `false` | Load on an OpenCode release outside `>=2.4.1 <2.5.0`, with a warning in status. |
+
+A saved query that would not use the cache, such as one using `CURRENT_DATE`, is refused unless its `allowUncached` is
+`true`: the `bigquery.saved` source runs only cached reads by default, so its cost stays bounded.
 
 ### Accounts
 
@@ -82,9 +85,7 @@ each agent's base `* * allow` rule:
    `bigquery.read` a source asserts on each operation, allowed;
 3. `bigquery.save`, `bigquery.cancel` and the five commits, at the change effect;
 4. `bigquery.uncapped_read`, asserted before a read the byte cap cannot bound: `ask` at `all` and `ask-changes`, `deny`
-   at `read-only`. These are the plugin's rules in local OpenCode. Jelly writes its own: under Allowed it runs such a read
-   without asking, bounded by the 120-second job limit and your budget if set; under Ask before changes and Read only it
-   asks.
+   at `read-only`. An app that writes its own rules decides it there.
 
 The change effect is `allow` at `all`, `ask` at `ask-changes` and `deny` at `read-only`. The last matching rule wins,
 so your own rules after the block, an agent's stricter rules and saved approvals still win. A commit also needs a
@@ -103,7 +104,7 @@ Every code the plugin raises. Each message reads `CODE: What happened. Next step
 | `ACCOUNT_READ_ONLY` | A commit on a Read account, or on any headless account. Nothing was sent to Google. | Tell the user; only they can sign in again choosing Read and write. |
 | `ACCOUNT_REQUIRED` | More than one account is configured and the call named none. | Pass account with one of the configured aliases; bigquery_status lists them. |
 | `ACCOUNT_UNKNOWN` | The account alias is not configured. | Pass a configured alias; bigquery_status lists them. |
-| `ADC_REFUSED` | Application Default Credentials are refused in hosted Jelly unless allowAdcInHost is set. | Use an interactive account, or ask the host's owner to set allowAdcInHost. |
+| `ADC_REFUSED` | Application Default Credentials are refused in a managed (hosted) engine unless allowAdcInHost is set. | Use an interactive account, or ask the host's operator to set allowAdcInHost. |
 | `ADC_UNAVAILABLE` | Application Default Credentials found nothing on this machine. | Set GOOGLE_APPLICATION_CREDENTIALS, or run the gcloud command the message names with the bigquery scope. |
 | `ADMIN_DISABLED` | Admin statements are turned off by the plugin's admin option. | Ask the user to set admin.enabled to true. |
 | `ADMIN_REASON_REQUIRED` | An admin plan was made without reason. | Plan again with reason. |
@@ -122,7 +123,7 @@ Every code the plugin raises. Each message reads `CODE: What happened. Next step
 | `COST_CAP` | The estimate is over the cap; the estimate, the cap and hints are given. | Narrow the query, or pass maxBytes up to the ceiling. |
 | `DATASET_FENCED` | A referenced object is outside the account's dataset fence, or a person's rule denied it. | Query allowed datasets, or ask the user to change the account's datasets option. |
 | `DRY_RUN_INCOMPLETE` | The dry run returned no query statistics, so the checks cannot run. | Retry once; if it repeats, report it. |
-| `HOST_UNTESTED` | The OpenCode version is outside the supported range (>=2.2.3 <2.4.0). | Update OpenCode or the plugin, or set the plugin option allowUntestedHost: true. |
+| `HOST_UNTESTED` | The OpenCode version is outside the supported range (>=2.4.1 <2.5.0). | Update OpenCode or the plugin, or set the plugin option allowUntestedHost: true. |
 | `INPUT_INVALID` | The tool's input does not fit its schema, or a saved query cannot be read as a source; nothing was sent to Google. | Check the input against the tool's schema, then call it again. |
 | `JOB_FAILED` | The job failed; Google's reason is in googleError. | Fix the query as googleError says; bigquery_job shows the job. |
 | `JOB_TIMEOUT` | The job reached its time limit; the bytes billed so far are given. | Narrow the query, or pass a longer jobTimeoutSeconds. |

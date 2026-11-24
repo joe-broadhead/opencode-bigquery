@@ -13,9 +13,9 @@ import {
   type InstallSource,
 } from "../../src/release.js"
 
-// The host's own report, as stock OpenCode 2.3.2 sends it: the tag is in the spec, and `version` is the resolved commit.
+// The host's own report, as stock OpenCode 2.4.1 sends it: the tag is in the spec, and `version` is the resolved commit.
 const SHA = "8fa625bce989ff7c47a586eaa39340374ba43434"
-const packageSource = (ref: string): InstallSource => ({ type: "package", target: `git+file:///cache/opencode-bigquery#${ref}`, version: SHA })
+const packageSource = (ref: string): InstallSource => ({ type: "package", target: `git+file:///cache/bigquery-plugin#${ref}`, version: SHA })
 const listOf = (...items: { id: string; source: InstallSource }[]) => async () => ({ location: { directory: "/p" }, data: items })
 
 describe("a source install does not call Google", () => {
@@ -29,18 +29,18 @@ describe("a source install does not call Google", () => {
   })
 
   it("reads the tag from a package install's spec, not its commit version", () => {
-    expect(isTaggedRelease(packageSource("v0.0.1"))).toBe(true)
-    expect(isTaggedRelease(packageSource("v0.0.1-rc.1"))).toBe(true)
+    expect(isTaggedRelease(packageSource("v0.0.0"))).toBe(true)
+    expect(isTaggedRelease(packageSource("v0.0.0-rc.1"))).toBe(true)
     expect(isTaggedRelease(packageSource("master"))).toBe(false)
     // The spec must name this plugin's own repository, in the forms a real install records.
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-bigquery#v0.0.1", version: SHA })).toBe(true)
-    expect(isTaggedRelease({ type: "package", target: "git+https://github.com/joe-broadhead/opencode-bigquery.git#v0.0.1", version: SHA })).toBe(true)
-    expect(isTaggedRelease({ type: "package", target: "git+ssh://git@github.com/joe-broadhead/opencode-bigquery.git#v0.0.1", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/bigquery-plugin#v0.0.0", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "git+https://github.com/we-the-rebel-alliance/bigquery-plugin.git#v0.0.0", version: SHA })).toBe(true)
+    expect(isTaggedRelease({ type: "package", target: "git+ssh://git@github.com/we-the-rebel-alliance/bigquery-plugin.git#v0.0.0", version: SHA })).toBe(true)
     // Another repository's semver tag is not a release of this plugin.
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-gws#v0.0.11", version: SHA })).toBe(false)
-    expect(isTaggedRelease({ type: "package", target: "github:someone/opencode-bigquery#v0.0.1", version: SHA })).toBe(false)
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-bigquery" })).toBe(false)
-    expect(isTaggedRelease({ type: "package", target: "github:joe-broadhead/opencode-bigquery", version: "0.0.1" })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/gws-plugin#v0.0.0", version: SHA })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:someone/bigquery-plugin#v0.0.0", version: SHA })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/bigquery-plugin" })).toBe(false)
+    expect(isTaggedRelease({ type: "package", target: "github:we-the-rebel-alliance/bigquery-plugin", version: "0.0.0" })).toBe(false)
     expect(isTaggedRelease({ type: "builtin" })).toBe(false)
     expect(isTaggedRelease({ type: "sdk" })).toBe(false)
     expect(isTaggedRelease({})).toBe(false)
@@ -53,10 +53,10 @@ describe("a source install does not call Google", () => {
       git("init", "--quiet")
       git("-c", "user.name=release test", "-c", "user.email=release@example.invalid", "commit", "--allow-empty", "-qm", "checkout")
       expect(isTaggedRelease({ type: "local", path: dir })).toBe(false)
-      git("tag", "v0.0.1")
+      git("tag", "v0.0.0")
       expect(isTaggedRelease({ type: "local", path: dir })).toBe(true)
       // A folder named after a tag, around a copy with no git tag, is not a release.
-      const named = mkdtempSync(join(tmpdir(), "@v0.0.1-bigquery-"))
+      const named = mkdtempSync(join(tmpdir(), "@v0.0.0-bigquery-"))
       try {
         expect(isTaggedRelease({ type: "local", path: named })).toBe(false)
       } finally {
@@ -73,7 +73,7 @@ describe("the release gate reads the host's report when the entry is there", () 
 
   it("is gated while the host does not list the plugin, then released once it does", async () => {
     let listed = false
-    const gate = createReleaseGate("bigquery.test", () => async () => ({ location: { directory: "/p" }, data: listed ? [{ id: "bigquery.test", source: packageSource("v0.0.1") }] : [] }))
+    const gate = createReleaseGate("bigquery.test", () => async () => ({ location: { directory: "/p" }, data: listed ? [{ id: "bigquery.test", source: packageSource("v0.0.0") }] : [] }))
     expect(await gate.released()).toBe(false) // setup: the host does not list the plugin itself
     listed = true
     expect(await gate.released()).toBe(true) // after setup: the entry carries the tag

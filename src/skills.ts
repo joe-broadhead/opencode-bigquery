@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { type Plugin, Skill } from "@opencode/plugin"
 import { BigQueryError } from "./domain/errors.js"
 
-export const SKILL_IDS = ["opencode-bigquery", "opencode-bigquery-sql"] as const
+export const SKILL_IDS = ["bigquery", "bigquery-sql"] as const
 
 type ParsedSkill = { readonly name: string; readonly description: string; readonly content: string }
 
