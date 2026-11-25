@@ -12,8 +12,9 @@ npm run check
 ```
 
 `npm run check` runs biome, actionlint, the typecheck, the bundle, the unit tests, the generated-docs check,
-`plugin-kit check` (the contract's gate, including T1 on OpenCode 2.4.1 and the unsupported-host refusal) and the pack
-check, in that order.
+`plugin-kit check` (the contract's gate, including T1 on OpenCode 2.4.1 and the unsupported-host refusal), the
+real-host skill test and the pack check, in that order. The host test loads the built bundle, so `npm run bundle` runs
+before it.
 
 ## Change a capability
 

@@ -1,5 +1,6 @@
-// The server entry: one `register` call wires every method through the contract's doors (contract §9), and the accounts
-// module registers one integration per alias. No door code, no tool registration, no permission rule is written here.
+// The server entry: one `register` call wires every method through the contract's doors (contract §9), the accounts
+// module registers one integration per alias, and this plugin registers its own skills (the contract's register does
+// not). No door code, no tool registration, no permission rule is written here.
 import { Plugin } from "@opencode/plugin";
 import { assertHost, register } from "@we-the-rebel-alliance/plugin-contract/register";
 import { registerPluginAccounts } from "./accounts.js";
@@ -9,6 +10,7 @@ import { createHandlers } from "./handlers/index.js";
 import { manifest, version } from "./manifest.js";
 import { loadOptions } from "./options.js";
 import { createProvider } from "./provider/index.js";
+import { registerSkills } from "./skills.js";
 
 export default Plugin.define({
   id: manifest.plugin.name,
@@ -18,6 +20,7 @@ export default Plugin.define({
     const options = loadOptions(context.options);
     const stateDir = stateDirOf();
     const detach = attachAuthHost(options, authHost(context as unknown as AuthContext), stateDir);
+    const disposers: (() => void | Promise<void>)[] = [detach];
     try {
       const auth = createAuthPort({ options, fetch: globalThis.fetch, stateDir });
       // The accounts' problems are recorded before `register`, never after it: status reads them from the handler's own
@@ -27,12 +30,15 @@ export default Plugin.define({
       const ports = createProvider({ options, auth, fetch: globalThis.fetch, stateDir });
       const handlers = createHandlers({ manifest, ports, options, version, hostVersion: context.app.version, accountProblems });
       const registration = await register(context, manifest, handlers);
+      disposers.push(() => registration.dispose());
+      // The contract's register wires the doors, not the skills: a package's `skills/*/SKILL.md` is its own to register.
+      const skills = await registerSkills(context);
+      disposers.push(() => skills.dispose());
       return async () => {
-        await registration.dispose();
-        detach();
+        for (const dispose of disposers.reverse()) await dispose();
       };
     } catch (error) {
-      detach();
+      for (const dispose of disposers.reverse()) await Promise.resolve(dispose()).catch(() => undefined);
       throw error;
     }
   },
