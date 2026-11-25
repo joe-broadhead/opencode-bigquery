@@ -39,6 +39,7 @@
     "lint": "biome check .",
     "pack": "node scripts/pack.mjs",
     "test": "vitest run",
+    "test:host": "vitest run test/host",
     "typecheck": "tsc --noEmit"
   },
   "capabilities": {

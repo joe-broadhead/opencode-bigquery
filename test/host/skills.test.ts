@@ -151,6 +151,9 @@ describe("the built plugin on the real 2.4.1 host", () => {
   test("every skills/<id>/SKILL.md id is registered after load", async () => {
     const expected = skillDirectories();
     expect(expected.length).toBeGreaterThan(0);
+    // The project directory is an empty temp dir: OpenCode's own `<project>/skills` discovery cannot supply these ids,
+    // so a pass can only come from `registerSkills` (the path assertion below also puts them inside the package).
+    expect(existsSync(join(work, "skills"))).toBe(false);
     const { host } = await createHost();
     try {
       const found = await untilSkills(host, expected);
