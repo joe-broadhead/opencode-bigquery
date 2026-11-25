@@ -44,6 +44,9 @@ jobs:
           "$RUNNER_TEMP/actionlint" -color
       # OpenCode installs plugins without lifecycle scripts, and no development dependency needs them.
       - run: npm ci --ignore-scripts
-      # lint, typecheck, build, unit, generated docs, the contract's conformance gate (T1 on 2.4.1 and the
+      # dist/ is committed, so a tag install needs no build. A stale committed bundle fails here.
+      - name: The committed bundle is current
+        run: npm run bundle && git diff --exit-code dist/
+      # lint, typecheck, bundle, unit, generated docs, the contract's conformance gate (T1 on 2.4.1 and the
       # unsupported-host refusal included), and pack.
       - run: npm run check

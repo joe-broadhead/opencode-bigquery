@@ -32,7 +32,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "bundle": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
     "conformance": "plugin-kit conformance",
     "docs": "plugin-kit docs",

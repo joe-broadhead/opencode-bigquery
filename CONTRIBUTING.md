@@ -11,8 +11,9 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-`npm run check` runs biome, the typecheck, the build, the unit tests, the generated-docs check, `plugin-kit check` (the
-contract's gate, including T1 on OpenCode 2.4.1 and the unsupported-host refusal) and the pack check, in that order.
+`npm run check` runs biome, actionlint, the typecheck, the bundle, the unit tests, the generated-docs check,
+`plugin-kit check` (the contract's gate, including T1 on OpenCode 2.4.1 and the unsupported-host refusal) and the pack
+check, in that order.
 
 ## Change a capability
 
@@ -25,6 +26,8 @@ contract's gate, including T1 on OpenCode 2.4.1 and the unsupported-host refusal
 
 ## Commits and releases
 
-Conventional commits, one change per pull request. The owner cuts `v0.0.x` releases on `master` with
-`npx plugin-kit release <version>`; the release workflow checks the tag against `package.json`, runs the gate, and
-publishes the GitHub Release with the packed tarball, the conformance report and `SHA256SUMS`. Never edit `dist/` by hand.
+Conventional commits, one change per pull request. `dist/index.js` is committed, so a tag install needs no build:
+regenerate it with `npm run bundle` and commit it; CI runs the bundle and `git diff --exit-code dist/`, so a stale
+bundle fails. The owner cuts `v0.0.x` releases on `master` with `npx plugin-kit release <version>`; the release workflow
+checks the tag against `package.json`, runs the gate, and publishes the GitHub Release with the packed tarball, the
+conformance report and `SHA256SUMS`.

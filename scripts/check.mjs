@@ -12,7 +12,7 @@ const STAGES = [
   // The workflows as workflows: actionlint catches a `${{ }}` in a context GitHub rejects before any step runs.
   { name: "workflows", command: "actionlint", args: [] },
   { name: "typecheck", command: "npx", args: ["tsc", "--noEmit"] },
-  { name: "build", command: "node", args: ["scripts/build.mjs"] },
+  { name: "bundle", command: "npm", args: ["run", "bundle"] },
   { name: "unit", command: "npx", args: ["vitest", "run"] },
   { name: "docs", command: "npx", args: ["plugin-kit", "docs", "--check"] },
   { name: "conformance", command: "npx", args: ["plugin-kit", "check"] },

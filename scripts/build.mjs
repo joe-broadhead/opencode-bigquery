@@ -59,8 +59,8 @@ try {
   checkNotice(metafile);
   const files = readdirSync(dist, { recursive: true }).map(String).sort();
   if (files.join(",") !== "index.js") throw new Error(`dist/ must hold exactly index.js, found: ${files.join(", ")}`);
-  console.log(`build: dist/index.js (${VERSION}), ${Object.keys(metafile.inputs).length} inputs`);
+  console.log(`bundle: dist/index.js (${VERSION}), ${Object.keys(metafile.inputs).length} inputs`);
 } catch (error) {
-  console.error(`build failed: ${relative(root, process.cwd()) === "" ? "" : ""}${error.message}`);
+  console.error(`bundle failed: ${relative(root, process.cwd()) === "" ? "" : ""}${error.message}`);
   process.exitCode = 1;
 }
