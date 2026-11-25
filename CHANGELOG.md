@@ -22,3 +22,24 @@ BigQuery over its REST API as OpenCode methods, on plugin-contract v0.
   billed, and the inline row budget.
 - **Docs and tests:** generated capabilities and configuration, two skills, and 39 unit tests over the real provider,
   read guards and handlers; a conformance fixture recorded from two synthetic accounts.
+
+### Removed since the last pre-4b release (v0.0.x, 4a `148360a`)
+
+Everything below was removed on purpose; nothing was dropped silently. The parity table in the pull request maps every
+old tool and surface to its new one.
+
+- **`/bigquery-status` command** — replaced by the `status` method, which is an agent tool, a Code Mode entry and an RPC
+  method at once; a command only duplicated it.
+- **`/bigquery-doctor` and `/bigquery-signout` commands** — the doctor and the local sign-out helper were part of the
+  pre-4b diagnostic surface. Sign-in state is OpenCode's credential store (and `/connect`); `status` reports each alias.
+- **The TUI plugin and its `/bigquery` slash/palette status dialog** — status is the `status` method; the plugin standard
+  makes a TUI optional and this package ships none.
+- **ADC sign-in mode** — `token` mode covers a headless machine with a short-lived access token, without the ADC library
+  and its bundling shims.
+- **The single `plan` tool** — replaced by `plan_write`, `plan_export`, `plan_share`, `plan_delete` and `plan_admin`
+  (and `plan_query` for the uncapped read): the contract's `register` refuses a plan with more than one committing
+  method, and a method has one class.
+- **The permission-only `bigquery.read` action** — folded into `events_list`'s, `saved_read`'s and the sources'
+  `operations`; contract v0 has no permission-only method.
+- **The RPC ids `google-cloud.bigquery` and `google-cloud.bigquery.tools`** — one RPC id, `bigquery` (contract §3).
+- **The default integration `bigquery-default`** — renamed `bigquery`; `bigquery-<alias>` is unchanged (contract §5).

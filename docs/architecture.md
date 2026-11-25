@@ -17,6 +17,12 @@ The handlers never touch a tool, an RPC registration or a permission rule: `regi
 access rules. A handler receives its input, the resolved `account`, the session and its signal, `call.bus`, and the
 plan when the call commits one.
 
+The contract's `register` does not register skills. `src/skills.ts` reads each `skills/<id>/SKILL.md` at setup, checks
+that its frontmatter `name` equals the directory, that it has a description and non-empty content, and registers it
+through `ctx.skill.transform`; the registration is disposed with the plugin. A skill that cannot be read refuses setup
+with a clear error rather than loading a partial set. `test/host/skills.test.ts` proves it on the real OpenCode 2.4.1
+host: it loads the built bundle, prompts once to activate it, and reads the host's own skill list.
+
 ## The provider client
 
 `src/provider/` is the only layer that talks to Google. `endpoints.ts` names every URL once; `http.ts` sends JSON over

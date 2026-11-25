@@ -28,6 +28,7 @@ Google OAuth (`accounts.via: "integration"`). There is no MCP server and no `bq`
 | `npm ci --ignore-scripts` | installs dev tooling only; there are no runtime dependencies |
 | `npm run check` | every stage CI runs, in order: biome lint, actionlint, typecheck, bundle, unit, `plugin-kit docs --check`, `plugin-kit check`, pack |
 | `npm run bundle` | builds the committed `dist/index.js` from `src/index.ts` with esbuild |
+| `npm test` | the unit tests and the real-host skill test (the host test needs a built `dist/`) |
 | `npx plugin-kit check` | the contract's gate alone: T0, the declaration, the recorded sources and accounts, status, bus, grants, T1 on 2.4.1 and the unsupported-host refusal, docs drift, forbidden, bundled kit |
 | `npx plugin-kit docs` | regenerates the generated doc sections from the manifest |
 | `npx plugin-kit record --account <alias>` | redacts `fixtures/conformance.json` after the plugin's own tests record it |
@@ -51,7 +52,9 @@ src/
   sources/            bigquery.jobs (events), bigquery.saved (snapshot), probe
   files/              save's path rules and its CSV, JSONL and Parquet writers
   handlers/           the one handler table, its JSON Schemas, and status
-test/unit/            handler, provider and guard tests; the conformance recorder writes fixtures/conformance.json
+  skills.ts           reads skills/*/SKILL.md and registers each with ctx.skill.transform
+test/unit/            handler, provider, guard and skill tests; the conformance recorder writes fixtures/conformance.json
+test/host/            the built bundle in the real OpenCode 2.4.1 host: every skill id is registered after load
 skills/               bigquery and bigquery-sql
 docs/                 capabilities, configuration, accounts, automations, architecture, security
 ```
