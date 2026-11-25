@@ -13,11 +13,10 @@ plan the person previews.
 
 ## Install
 
-The current release is `v0.0.0` (tag and GitHub Release at `58c9481`); this branch prepares the `v0.0.1` follow-up.
-Once `v0.0.1` is cut, install it with
+The current release is `v0.0.0`; install it with
 
 ```sh
-opencode plugin add github:we-the-rebel-alliance/bigquery-plugin#v0.0.1
+opencode plugin add github:we-the-rebel-alliance/bigquery-plugin#v0.0.0
 ```
 
 The plugin needs OpenCode `>=2.4.1 <2.5.0` and has no runtime dependencies: `dist/index.js` is one self-contained bundle.
@@ -33,7 +32,7 @@ The plugin needs OpenCode `>=2.4.1 <2.5.0` and has no runtime dependencies: `dis
 {
   "plugins": [
     {
-      "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.1",
+      "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.0",
       "options": { "accounts": { "work": { "billingProject": "my-project-1234" } } }
     }
   ]

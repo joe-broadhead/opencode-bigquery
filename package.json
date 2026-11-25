@@ -1,6 +1,6 @@
 {
   "name": "@we-the-rebel-alliance/bigquery-plugin",
-  "version": "0.0.1",
+  "version": "0.0.0",
   "description": "BigQuery over its REST API, as OpenCode tools: datasets, tables, queries under a byte cap, saved results, and plan-then-commit changes.",
   "keywords": [
     "opencode",
@@ -29,7 +29,8 @@
     "skills",
     "assets",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
     "bundle": "node scripts/build.mjs",
