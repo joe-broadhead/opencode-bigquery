@@ -28,7 +28,7 @@ sign-in; no other request asks for them.
 
 - A status reason is redacted and cut to one line of at most 160 characters.
 - A refusal's message and next step are built from the plugin's codes and validated identifiers, never from Google's
-  text or from a row. Google's message reaches the model in `googleError`, marked `trust: "untrusted"`.
+  text or from a row; Google's own message is kept on the error for a log and is not carried into a refusal.
 - A bus event carries `{ capability, account, reason }` and nothing else; the writer screens it for secrets.
 - A credential never reaches a log, a fixture, a doc or status. A fixture that needs a person's address uses
   `example.test`/`example.com`.

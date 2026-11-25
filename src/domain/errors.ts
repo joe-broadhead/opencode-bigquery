@@ -5,7 +5,7 @@
  * them equal.
  *
  * `message` and `next` are built only from codes and validated identifiers (`src/domain/identifiers.ts`), never from
- * Google's text or the data: Google's text goes into `googleError` (`src/domain/contract.ts`).
+ * Google's text or the data: Google's message stays on the error for a log and never enters a refusal's line.
  *
  * `owner` names the package that raises the code (docs/ownership.md); Day 0 raises the setup and contract codes.
  * This module imports nothing, so scripts can load it directly.
@@ -144,7 +144,7 @@ export const ErrorCode = {
     owner: "B",
   },
   SQL_INVALID: {
-    meaning: "The dry run or the lexer rejected the SQL; the line and column are given, Google's text is in googleError.",
+    meaning: "The dry run or the lexer rejected the SQL; the line and column are given.",
     next: "Fix the SQL at that position; table shows the names.",
     state: "refused",
     owner: "C",
@@ -241,8 +241,8 @@ export const ErrorCode = {
     owner: "B",
   },
   JOB_FAILED: {
-    meaning: "The job failed; Google's reason is in googleError.",
-    next: "Fix the query as googleError says; job shows the job.",
+    meaning: "The job failed; Google's reason stays on the error, not in the refusal.",
+    next: "Fix the query and run it again; job shows the job.",
     state: "failed",
     owner: "B",
   },

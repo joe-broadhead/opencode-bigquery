@@ -47,8 +47,9 @@ Each alias in `options.accounts` is its own integration, `<name>` for `default` 
 { "accounts": { "work": { "billingProject": "work-project" }, "personal": { "billingProject": "home-project" } } }
 ```
 
-Run `/connect` once per alias. Every method that reads or changes BigQuery takes `account`; with one account it may be
-left out, with several a missing one is `ACCOUNT_REQUIRED` and its next step lists the aliases. A `token` account reads
+Run `/connect` once per alias. Every method that reads or changes BigQuery directly takes `account`; with one account
+it may be left out, with several a missing one is `ACCOUNT_REQUIRED` and its next step lists the aliases. A commit
+takes only `{ planId }` and runs as the account that made its plan. A `token` account reads
 a short-lived access token from an environment variable instead (`"mode": "token", "tokenEnv": "GOOGLE_ACCESS_TOKEN"`).
 
 The sign-in's level is Read or Read and write. Read runs every read and refuses every commit before Google is called;

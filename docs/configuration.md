@@ -55,7 +55,8 @@ Run `/connect` once per alias; the integrations are `bigquery-work` and `bigquer
 { "options": { "access": "ask-changes", "accounts": { "work": { "billingProject": "work-project-1234" } } } }
 ```
 
-A read the cap cannot bound asks too (`run_query`'s effect is `ask`); with `read-only` it never runs.
+A read the cap cannot bound asks too (`run_query`'s effect is `ask`): it runs under `all`, and asks under
+`ask-changes` and `read-only`.
 
 ### A tighter cap and a daily budget
 

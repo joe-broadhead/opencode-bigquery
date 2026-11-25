@@ -70,8 +70,9 @@ A planner returns the preview and the statement, and the contract's `register` m
 
 ## Known limits (live checks)
 
-These behaviours are implemented conservatively and their exact provider answers are confirmed against a real Google
-Cloud project; none of them lets a call run more openly than the guarded path above.
+These behaviours are implemented conservatively. Their exact provider answers have not yet been confirmed against a
+real Google Cloud project (none is available to this repository), and each is implemented so a wrong answer cannot let
+a call run more openly than the guarded path above.
 
 - **Cloud session limits (L1).** The exact `invalid_grant` subtype and description Google uses under a Cloud session
   limit, and the number of hours it states, are unconfirmed. Any reauthentication subtype is treated as a sign-in need,

@@ -57,6 +57,8 @@ None.
 ### Reads
 
 - `status` — every alias's state, the host range, the agents the access rules miss, and one redacted next step.
+  It takes no account (`accounts: none`): it answers for every alias at once, so the inventory's `optional` is
+  reconciled as `none`.
 - `probe` — the signed-in account behind a source, owner included; reads no BigQuery content.
 - `list` — projects; a project's datasets; a dataset's tables or routines. Free.
 - `table` — a table's schema, partitioning, clustering, size and view SQL; an optional sample (free) or its partitions
@@ -85,8 +87,8 @@ None.
 - `save` writes a finished job's rows to a local CSV, JSONL or Parquet file; it never calls a billed API.
 
 The methods table's class decides access: under `ask-changes` every class but `read` asks first, and under `read-only`
-they are off. `run_query` carries an `effect` of `ask`, so a read the cap cannot bound asks under `ask-changes` even
-though it is classed as a read.
+they are off. `run_query` carries an `effect` of `ask`, so a read the cap cannot bound asks under `ask-changes` and `read-only`
+even though it is classed as a read.
 
 ## Sources
 

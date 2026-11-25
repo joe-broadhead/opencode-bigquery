@@ -21,8 +21,8 @@ import { sourceError } from "./errors.js"
 import type { SourceDeps } from "./events.js"
 
 /**
- * The operations the source declares (the descriptor's list), each asserted as the contract's `bigquery.read` on
- * `<account>:<operation>` before the read's first call.
+ * The operations the source declares: `saved_read` carries them, and the register asserts its own action
+ * (`bigquery.saved_read`) on each `<account>:<operation>` before the handler runs.
  */
 export const SAVED_OPERATIONS: readonly string[] = [
   "bigquery.jobs.getQueryResults",

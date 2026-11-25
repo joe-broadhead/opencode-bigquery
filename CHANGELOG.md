@@ -20,8 +20,8 @@ BigQuery over its REST API as OpenCode methods, on plugin-contract v0.
 - **Bus:** `changed` after a job starts or is cancelled.
 - **Safety:** the account's dataset fence, a policy-tag rule, a daily or per-session budget counted from what Google
   billed, and the inline row budget.
-- **Docs and tests:** generated capabilities and configuration, two skills, and 39 unit tests over the real provider,
-  read guards and handlers; a conformance fixture recorded from two synthetic accounts.
+- **Docs and tests:** generated capabilities and configuration, two skills, and 51 tests over the real provider,
+  read guards, handlers and the real 2.4.1 host; a conformance fixture recorded from two synthetic accounts.
 
 ### Removed since the last pre-4b release (v0.0.x, 4a `148360a`)
 
