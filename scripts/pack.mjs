@@ -18,7 +18,7 @@ try {
   const packed = execFileSync("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", join(workspace, "tarball")], { cwd: root, encoding: "utf8" });
   const [entry] = JSON.parse(packed);
   const files = entry.files.map((file) => file.path).sort();
-  const expected = ["LICENSE", "README.md", "assets/icon-128.png", "assets/icon-256.png", "assets/icon.svg", "dist/index.js", "package.json", "skills/bigquery/SKILL.md", "skills/bigquery-sql/SKILL.md"].sort();
+  const expected = ["LICENSE", "NOTICE", "README.md", "assets/icon-128.png", "assets/icon-256.png", "assets/icon.svg", "dist/index.js", "package.json", "skills/bigquery/SKILL.md", "skills/bigquery-sql/SKILL.md"].sort();
   const missing = expected.filter((path) => !files.includes(path));
   const unexpected = files.filter((path) => !expected.includes(path));
   for (const path of missing) problems.push(`the tarball is missing ${path}`);
