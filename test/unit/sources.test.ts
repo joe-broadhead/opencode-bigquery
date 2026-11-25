@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { JOBS, PROJECT, TIE_END } from "../support/google.js";
 import { harness, testCall } from "../support/harness.js";
+
+const packageVersion = (JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 describe("sources", () => {
   test("events_list answers a page of finished jobs, oldest first", async () => {
@@ -109,7 +112,7 @@ describe("sources", () => {
     const h = harness();
     const answer = (await h.handlers.status!.run({}, testCall("default"))) as Record<string, unknown>;
     expect(answer.name).toBe("bigquery");
-    expect(answer.version).toBe("0.0.0");
+    expect(answer.version).toBe(packageVersion);
     expect(answer.state).toBe("ready");
     expect(answer.host).toEqual({ version: "2.4.1", range: ">=2.4.1 <2.5.0", tested: ["2.4.1"] });
     expect((answer.accounts as { alias: string; state: string }[]).map((account) => [account.alias, account.state])).toEqual([

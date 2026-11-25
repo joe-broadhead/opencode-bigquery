@@ -87,8 +87,8 @@ None.
 - `save` writes a finished job's rows to a local CSV, JSONL or Parquet file; it never calls a billed API.
 
 The methods table's class decides access: under `ask-changes` every class but `read` asks first, and under `read-only`
-they are off. `run_query` carries an `effect` of `ask`, so a read the cap cannot bound asks under `ask-changes` and `read-only`
-even though it is classed as a read.
+they are off. `run_query` carries an `effect` of `ask`, so a read the cap cannot bound asks under `all`, `ask-changes`
+and `read-only` even though it is classed as a read; a person's explicit rule can still allow it.
 
 ## Sources
 

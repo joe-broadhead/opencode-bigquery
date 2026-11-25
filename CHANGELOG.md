@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.0.1 (2026-11-25)
+
+A skills-loader follow-up to `v0.0.0`; no method, option or access behaviour changed.
+
+- **Skills:** the loader parses each `SKILL.md` frontmatter as YAML with the `yaml` package (bundled into
+  `dist/index.js`), so a folded or literal description (`>`, `|`, `>-`, `|-` and their variants) registers the text the
+  author wrote, never the marker. A description that is only a block marker, empty or not text refuses setup with
+  `SCHEMA_VIOLATION`; the frontmatter `name` must equal the skill's directory.
+- **Tests:** the real-host test parses each `SKILL.md` with `yaml` and asserts the registered description equals the
+  parsed text exactly; unit tests cover folded, literal and chomping block scalars, invalid YAML and the refusals.
+  47 tests over the real provider, read guards, handlers and the real 2.4.1 host.
+- **Fixture:** the conformance fixture records `accounts.real: false`, because its two accounts are synthetic.
+
 ## 0.0.0 (2026-11-25)
 
 BigQuery over its REST API as OpenCode methods, on plugin-contract v0.
@@ -20,10 +33,8 @@ BigQuery over its REST API as OpenCode methods, on plugin-contract v0.
 - **Bus:** `changed` after a job starts or is cancelled.
 - **Safety:** the account's dataset fence, a policy-tag rule, a daily or per-session budget counted from what Google
   billed, and the inline row budget.
-- **Skills:** the loader parses `SKILL.md` frontmatter as YAML, so a folded or literal description registers its text;
-  a bare block marker or an empty description refuses setup.
-- **Docs and tests:** generated capabilities and configuration, two skills, and 47 tests over the real provider,
-  read guards, handlers and the real 2.4.1 host; a conformance fixture recorded from two synthetic accounts.
+- **Docs and tests:** generated capabilities and configuration, two skills, and 39 unit tests over the real provider,
+  read guards and handlers; a conformance fixture recorded from two synthetic accounts.
 
 ### Removed since the last pre-4b release (v0.0.x, 4a `148360a`)
 

@@ -57,7 +57,7 @@ describe("conformance fixture", () => {
       plugin: "@we-the-rebel-alliance/bigquery-plugin",
       namespace: h.manifest.plugin.summary,
       accounts: {
-        real: true,
+        real: false,
         aliases: ["work", "personal"],
         required: { method: "list", code: "ACCOUNT_REQUIRED" },
         unknown: { method: "list", account: "nobodyhere", code: "ACCOUNT_UNKNOWN" },
