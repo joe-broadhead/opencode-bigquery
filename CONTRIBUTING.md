@@ -1,61 +1,33 @@
 # Contributing
 
-## Setup
+The plugin follows [the plugin standard](https://github.com/we-the-rebel-alliance/plugin-contract/blob/master/docs/plugin-standard.md)
+and [the contract](https://github.com/we-the-rebel-alliance/plugin-contract/blob/master/docs/contract.md). Read
+[AGENTS.md](AGENTS.md) before changing anything.
 
-- Node.js 22.12 or later, with npm. CI uses Node.js 24.
-- Bun 1.4 (CI uses 1.4.4). The conformance, host and pack tests run with `bun test`.
-- macOS or Linux.
+## Set up
 
 ```sh
-git clone https://github.com/we-the-rebel-alliance/bigquery-plugin.git
-cd bigquery-plugin
 npm ci --ignore-scripts
 npm run check
 ```
 
-No dependency needs install scripts, and OpenCode installs plugins without them, so always pass `--ignore-scripts`.
+`npm run check` runs biome, actionlint, the typecheck, the bundle, the unit tests, the generated-docs check,
+`plugin-kit check` (the contract's gate, including T1 on OpenCode 2.4.1 and the unsupported-host refusal) and the pack
+check, in that order.
 
-### Run your checkout in OpenCode
+## Change a capability
 
-Build it, then add the clone's path to `plugins` in your OpenCode config instead of the release install:
+1. Edit `capabilities` in `package.json`: a method, source or action, with its class, operations, accounts and cost.
+2. Write the handler in `src/handlers/`; put the provider call in `src/provider/`.
+3. Add a unit test, then record fixtures for two accounts:
+   `npx plugin-kit record --account <alias>` redacts `fixtures/conformance.json` after the plugin's tests write it.
+4. Run `npx plugin-kit docs` to regenerate the generated doc sections, then `npm run check`.
+5. Describe the change in `docs/capabilities.md` and, if agents use it, in `skills/bigquery/SKILL.md`.
 
-```sh
-npm run build
-```
+## Commits and releases
 
-```json
-{ "plugins": [{ "package": "/path/to/bigquery-plugin" }] }
-```
-
-## `npm run check`
-
-One command, `scripts/check.mjs`, runs every stage in order and stops at the first failure. `node scripts/check.mjs
-<stage>...` runs only the named stages.
-
-| Stage | What it does |
-| --- | --- |
-| `typecheck` | `tsc` over `src/` and the tests. |
-| `unit` | Vitest over `test/unit/`. |
-| `conformance` | The source contract's declaration checks over the `sources` block, under Bun. |
-| `kit` | The release kit's own tests. |
-| `build` | esbuild bundles `dist/index.js` and `dist/tui.js`, and checks `NOTICE`. |
-| `icons` | The family icon contract. |
-| `host` | The built plugin in an embedded OpenCode 2.4.1 host, with every request off loopback blocked. |
-| `pack` | Packs, installs with scripts disabled and imports both entries. |
-| `forbidden` | The forbidden APIs and private names. |
-| `copies` | The shared kit files against their pinned hashes. |
-| `whitelist` | `package.json` and `dist/` against the approved package shape. |
-| `actionlint` | The workflows, when `actionlint` is on PATH (CI installs it). |
-
-## Releases
-
-Versions follow semantic versioning on the plugin's contract: its options, the tool names and actions, the
-`/bigquery-status` command, the status RPC, the tools RPC and its `sources` block, the skill names and the default
-rules.
-
-Each release is the GitHub tag `v<version>`, made only by `.github/workflows/release.yml` after the owner approves the
-`release` environment. While changes land, their notes go under `## [Unreleased]` in `CHANGELOG.md`; a release-prep
-commit runs `node scripts/changelog.mjs release`. `package.json` stays `"private": true` and in canonical form.
-
-A pull request's CI runs the one `ci` job on Node 24 with `ubuntu-24.04`. The release workflow runs its own checks on
-the release commit before the owner approves it.
+Conventional commits, one change per pull request. `dist/index.js` is committed, so a tag install needs no build:
+regenerate it with `npm run bundle` and commit it; CI runs the bundle and `git diff --exit-code dist/`, so a stale
+bundle fails. The owner cuts `v0.0.x` releases on `master` with `npx plugin-kit release <version>`; the release workflow
+checks the tag against `package.json`, runs the gate, and publishes the GitHub Release with the packed tarball, the
+conformance report and `SHA256SUMS`.

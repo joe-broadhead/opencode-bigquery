@@ -32,11 +32,11 @@ import { BigQueryError } from "../domain/errors.js"
 import type { DatasetReference, DryRunStatistics, RoutineInfo, TableInfo, TableReference } from "../domain/google.js"
 import type { Findings, Lexer } from "../domain/lexer-api.js"
 import type { Ports } from "../ports.js"
-import { rethrowCallFailure } from "./callerrors.js"
 import type { TtlCache } from "./cache.js"
+import { rethrowCallFailure } from "./callerrors.js"
 import { createLexer } from "./lexer.js"
 import { routineProbeSql } from "./routinebody.js"
-import { tableFacts, type TableFacts } from "./tables.js"
+import { type TableFacts, tableFacts } from "./tables.js"
 
 /** How deep a view or routine chain may go (design §5.1 step 4). */
 export const MAX_DEPTH = 3

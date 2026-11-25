@@ -56,16 +56,14 @@
  * literals and may hold secrets). Every title passes the contract's secret screen, so a refused job is in `refused[]`
  * with `reason: "secret"`, never in `events[]`.
  */
-import { fitPage, makeEvent, parseEventsListInput, screenEvents, startTime, type EventsListResult, type EventsOwner, type RefusedEvent, type Scope, type SourceEvent } from "@we-the-rebel-alliance/source-contract/events"
-import { PLUGIN_ID } from "../constants.js"
-import { PROJECT_ID } from "../domain/contract.js"
+import { type EventsListResult, type EventsOwner, eventsListResult, fitPage, makeEvent, parseEventsListInput, type RefusedEvent, type Scope, type SourceEvent, screenEvents, startTime } from "@we-the-rebel-alliance/plugin-contract/events"
+import { PACKAGE } from "../constants.js"
+import { PROJECT_ID } from "../domain/reference.js"
 import { formatBytes } from "../guards/cost.js"
 import { settingsOf } from "../guards/settings.js"
 import type { Options } from "../options.js"
 import type { JobStatus, Ports } from "../ports.js"
-import type { Call } from "../tool-spec.js"
-import { assertSourceReads, JOBS_SOURCE } from "./assert.js"
-import { bindingOf, decodeState, encodeState, hashOf, iso, type Binding, type CursorState, type Dark } from "./cursor.js"
+import { type Binding, bindingOf, type CursorState, type Dark, decodeState, encodeState, hashOf, iso } from "./cursor.js"
 import { sourceError } from "./errors.js"
 
 const MINUTE = 60_000
@@ -89,12 +87,13 @@ export const JOBS_PER_CALL = 100
 /** The source's declared `maxBytes`, passed to `fitPage`, so a page keeps the size the descriptor promises. */
 export const MAX_PAGE_BYTES = 262_144
 
-/** What a source read needs: the ports, the options, the account the registry resolved and the call. */
+/** What a source read needs: the ports, the options, the account the register resolved and the call's signal. */
 export interface SourceDeps {
   readonly ports: Ports
   readonly options: Options
   readonly account: string
-  readonly call: Call
+  readonly sessionID: string
+  readonly signal: AbortSignal
 }
 
 /** One listed job, with what the walk and the event need. */
@@ -186,7 +185,7 @@ class Listing {
         maxResults: JOBS_PER_CALL,
         ...(this.token !== undefined ? { pageToken: this.token } : {}),
       },
-      this.deps.call.signal,
+      this.deps.signal,
     )
     if (this.calls === 0 && page.serverTime !== undefined) this.firstDate = page.serverTime
     this.calls += 1
@@ -221,7 +220,7 @@ class Listing {
 
 /** The owner every page names: the signed-in account, by its address when Google reports one. */
 async function ownerOf(deps: SourceDeps): Promise<EventsOwner> {
-  const identity = await deps.ports.auth.identity(deps.account, deps.call.signal)
+  const identity = await deps.ports.auth.identity(deps.account, deps.signal)
   const email = identity.email
   return email !== undefined ? { id: `mailto:${email}`, label: email } : { id: `bigquery:account:${deps.account}`, label: `BigQuery account ${deps.account}` }
 }
@@ -299,12 +298,11 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
     }
   } else {
     // A first read covers its `since` (or the contract's 24 h): jobs that ended after it, created up to a day before.
-    const since = startTime(value, hostNow)
+    const since = startTime({ since: value.since }, hostNow)
     state = { e: since, f: since - LOOKBACK_MS }
   }
 
-  // The source contract's per-operation read, before any Google call: a person's off switch for it is consulted.
-  await assertSourceReads(deps, JOBS_SOURCE, ["bigquery.jobs.list"])
+  // The register asserted the method's declared operations before this handler ran.
   const owner = await ownerOf(deps)
 
   let gap: Gap | undefined
@@ -327,7 +325,7 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
   const startDark = new Set<string>()
   let starting = state.c === undefined
   const unavailable = (locations: readonly string[], why: string) =>
-    sourceError("UNAVAILABLE", `BigQuery reported ${locationWords(locations)} unreachable ${why}, so nothing was read.`, "Call the source again later with the same cursor; nothing is lost while it waits.", { retryAfterSec: 300 })
+    sourceError("UNAVAILABLE", `BigQuery reported ${locationWords(locations)} unreachable ${why}, so nothing was read.`, "Call the source again later with the same cursor; nothing is lost while it waits.")
   const noteUnreachable = (_index: number, locations: readonly string[]) => {
     for (const raw of locations) {
       const location = raw.toLowerCase()
@@ -405,7 +403,7 @@ export async function eventsPage(deps: SourceDeps, input: unknown): Promise<Even
       text: "",
       url: consoleUrl(item),
       labels: [item.statementType, "DONE", item.ocTool].filter((label): label is string => typeof label === "string" && label.length > 0),
-      actors: [{ role: "author", id: owner.id, ...(owner.label !== undefined ? { name: owner.label } : {}) }],
+      actors: [{ role: "author", id: owner.id }],
     })
     const screened = screenEvents([event], { ownedBy: () => true })
     if (screened.refused.length > 0) {
@@ -532,32 +530,15 @@ function pageOf(
     try {
       encodeState(binding, state)
     } catch {
-      throw sourceError("UNAVAILABLE", "BigQuery reported more locations unreachable than this source's cursor can hold, so nothing was read.", "Call the source again later with the same cursor; nothing is lost while it waits.", { retryAfterSec: 300 })
+      throw sourceError("UNAVAILABLE", "BigQuery reported more locations unreachable than this source's cursor can hold, so nothing was read.", "Call the source again later with the same cursor; nothing is lost while it waits.")
     }
   }
   const ordered = [...events].sort((left, right) => Date.parse(left.occurred_at) - Date.parse(right.occurred_at) || (left.external_id < right.external_id ? -1 : 1))
-  return {
-    source: "jobs",
-    account: deps.account,
-    owner,
-    events: ordered,
-    cursor: encodeState(binding, state),
-    more,
-    trust: "untrusted",
-    ...(scope !== undefined ? { scope: canonicalOf(scope) } : {}),
-    ...(refused.length > 0 ? { refused: [...refused] } : {}),
-    ...(gap !== undefined ? { gap } : {}),
-    plugin: PLUGIN_ID,
+  return eventsListResult({ source: "jobs", account: deps.account, owner }, ordered, encodeState(binding, state), more, {
+    ...(scope === undefined ? {} : { scope }),
+    ...(refused.length > 0 ? { refused } : {}),
+    ...(gap === undefined ? {} : { gap }),
+    plugin: PACKAGE,
     asOf: iso(deps.ports.clock.now()),
-  }
-}
-
-/** The scope in canonical form, as the contract's result carries it: keys sorted, lists sorted without repeats. */
-function canonicalOf(scope: Scope): Record<string, string | string[]> {
-  const out: Record<string, string | string[]> = {}
-  for (const key of Object.keys(scope).sort()) {
-    const value = scope[key]!
-    out[key] = typeof value === "string" ? value : [...new Set(value)].sort()
-  }
-  return out
+  })
 }

@@ -1,157 +1,143 @@
 /**
- * `bigquery_plan` (design §5.2): steps 1–2 and 4–7 of §5.1 through package C's `prepareRead` in `inspect` mode, then the
- * classification of design §5.2, the preview a person reads, and a single-use plan.
+ * The six planning methods (design §5.2): a change's plan, and the uncapped read's. Each dry-runs its statement through
+ * the read guards in `inspect` mode, classifies it from BigQuery's own answer, checks the account's dataset fence, and
+ * answers the preview a person reads plus the private statement the commit re-checks. Nothing runs and nothing is
+ * stored here: the contract's `register` mints the plan id, keeps the whole answer and spends it once (contract §6).
  *
- * **Classification comes from BigQuery's dry run**, never from a parse of the SQL: `statementType` picks the kind
- * (`src/domain/statements.ts`), and the lexer may only raise it (a `MERGE` with `DELETE`, `OR REPLACE`, `DROP` in
- * `ALTER`, expiration options, `LOAD DATA OVERWRITE`, `CALL`, `EXECUTE IMMEDIATE`). A plain side-effect-free `SELECT` the
- * cap can bound is refused here (`CATEGORY_MISMATCH`: it runs through `bigquery_query`); one the cap cannot bound is an
- * `uncapped-read` plan (Q13) unless the account refuses those; a read with external effects or unresolved references is
- * a `write` plan, because a Read account must not run it. The objects a change affects come from the dry run's own DDL,
- * DCL and DML fields (`src/changes/statistics.ts`), never from a `FROM`-clause parse.
- *
- * Nothing runs: the dry run and the metadata reads are free, and the plan is in memory. On a Read account the preview is
- * still returned, with `committable: false`, so the person can see what a Read and write sign-in would do.
+ * A plan belongs to one class: `plan_write`, `plan_export`, `plan_share`, `plan_delete` and `plan_admin` each refuse a
+ * statement of another class and name the planner that takes it, because the contract's `methods` table gives each
+ * commit its own class and one plan has exactly one committing method. `plan_query` is the uncapped read's plan.
  */
-import { actionOf, type Category } from "../domain/actions.js"
-import { tableResource } from "../domain/accounts.js"
-import { BigQueryError } from "../domain/errors.js"
-import type { OutputOf } from "../domain/contract.js"
-import { commitCall, type Plan, type PlanPreview, type PlannedStatement } from "../domain/plans.js"
-import { type Token } from "../domain/lexer-api.js"
-import type { Options } from "../options.js"
-import { parseBytes } from "../options.js"
-import type { HandlerContext, Handlers } from "../registry.js"
-import { isFenced } from "../guards/fence.js"
-import { capAndBudget, usdFor } from "../guards/cost.js"
-import { createLexer, significantTokens } from "../guards/lexer.js"
-import { prepareRead, readContext, type PreparedRead } from "../guards/read.js"
-import { cacheOf } from "../guards/cache.js"
-import { RowPolicyProber, type RowVerdict } from "../guards/rowpolicy.js"
-import { sessionHash } from "../guards/session.js"
-import type { Fence } from "../guards/settings.js"
-import { boundSentence } from "./bounds.js"
-import { scriptStatements, scriptSummary, type ScriptStatementInput } from "./scripts.js"
-import { changeTargets, type PlanTarget, targetSafe, targetsOf, targetsVerified, unionTargets, type Target } from "./statistics.js"
-import { statementSources, statementTarget } from "./statement-target.js"
-import type { Call } from "../tool-spec.js"
+import { type Category, COMMITTER, PLANNER } from "../constants.js";
+import { BigQueryError } from "../domain/errors.js";
+import type { PlannedChange, PlannedRead, PlannedStatement } from "../domain/plans.js";
+import { cacheOf } from "../guards/cache.js";
+import { capAndBudget, usdFor } from "../guards/cost.js";
+import { isFenced } from "../guards/fence.js";
+import { createLexer, significantTokens } from "../guards/lexer.js";
+import { type PreparedRead, prepareRead, readContext } from "../guards/read.js";
+import { RowPolicyProber, type RowVerdict } from "../guards/rowpolicy.js";
+import { sessionHash } from "../guards/session.js";
+import type { AccountSettings } from "../guards/settings.js";
+import type { HandlerContext } from "../handlers/context.js";
+import { parseBytes } from "../options.js";
+import { boundSentence } from "./bounds.js";
+import { type ScriptStatementInput, scriptStatements, scriptSummary } from "./scripts.js";
+import { statementSources, statementTarget } from "./statement-target.js";
+import { changeTargets, type Target, targetSafe, targetsOf, targetsVerified, unionTargets } from "./statistics.js";
 
 /** The default job limit for a script: 300 s unless the caller passes a lower one (design §5.2). */
-const SCRIPT_TIMEOUT_SECONDS = 300
+const SCRIPT_TIMEOUT_SECONDS = 300;
 
 /** A byte size from the input: a number, or a string such as `1GiB`. */
-const bytesOf = (value: string | number) => (typeof value === "number" ? value : parseBytes(value))
+const bytesOf = (value: string | number) => (typeof value === "number" ? value : parseBytes(value));
 
-export interface ClassifyInput {
-  /** The plan's `maxBytes`; a script requires one. */
-  readonly requestedBytes?: number
-  readonly jobTimeoutSeconds?: number
-  /** The person's reason, for an admin plan. */
-  readonly reason?: string
+/** What every planner takes. */
+export interface PlanInput {
+  readonly sql: string;
+  readonly params?: Readonly<Record<string, unknown>> | readonly unknown[];
+  readonly project?: string;
+  readonly location?: string;
+  readonly maxBytes?: string | number;
+  readonly jobTimeoutSeconds?: number;
+  readonly reason?: string;
 }
 
 export interface Classification {
-  readonly category: Category
-  readonly capEnforceable: boolean
-  readonly jobTimeoutSeconds: number
+  readonly category: Category | "uncapped-read";
+  readonly capEnforceable: boolean;
+  readonly jobTimeoutSeconds: number;
 }
 
 /**
  * Design §5.2's one table: a statement type (already raised by the lexer) to a category, or a refusal. The lexer can
  * only make this stricter, so the table's kind is never lowered.
  */
-export function classify(prepared: PreparedRead, options: Options, input: ClassifyInput): Classification {
+export function classify(prepared: PreparedRead, options: HandlerContext["options"], input: { requestedBytes?: number; jobTimeoutSeconds?: number; reason?: string }): Classification {
   if (prepared.kind === "read") {
     if (prepared.effects.length > 0 || prepared.unresolved.length > 0) {
       // §5.1 steps 4 and 5 send these to the change path; only a Read and write account may run them.
-      return { category: "write", capEnforceable: prepared.cap.enforceable, jobTimeoutSeconds: normalTimeout(input, options) }
+      return { category: "write", capEnforceable: prepared.cap.enforceable, jobTimeoutSeconds: normalTimeout(input, options) };
     }
     if (prepared.cap.enforceable) {
-      throw new BigQueryError(
-        "CATEGORY_MISMATCH",
-        "The SQL is a SELECT the byte cap can bound, so it runs through bigquery_query and needs no plan",
-        "Call bigquery_query({ sql }) instead.",
-      )
+      throw new BigQueryError("CATEGORY_MISMATCH", "The SQL is a SELECT the byte cap can bound, so it runs through query and needs no plan", "Call query({ sql }) instead.");
     }
     if (options.uncappedReads === "refuse") {
       throw new BigQueryError(
         "CAP_NOT_ENFORCEABLE",
         `The byte cap cannot bound this query: ${prepared.cap.whyNot ?? "an unknown condition"}, and the account's uncappedReads option refuses one`,
-        "Ask the user to set uncappedReads to ask, or narrow the query to native tables without row access policies.",
-      )
+        "Ask the person to set uncappedReads to ask, or narrow the query to native tables without row access policies.",
+      );
     }
-    return { category: "uncapped-read", capEnforceable: false, jobTimeoutSeconds: uncappedTimeout(input, options) }
+    return { category: "uncapped-read", capEnforceable: false, jobTimeoutSeconds: uncappedTimeout(input, options) };
   }
 
   if (prepared.statementType === "SCRIPT") {
     if (!options.scripts) {
-      throw new BigQueryError("SCRIPT_REFUSED", "The plugin's scripts option is off, so a script cannot be planned", "Split the script into single statements, or ask the user to set scripts to true.")
+      throw new BigQueryError("SCRIPT_REFUSED", "The plugin's scripts option is off, so a script cannot be planned", "Split the script into single statements, or ask the person to set scripts to true.");
     }
     if (input.requestedBytes === undefined) {
-      throw new BigQueryError(
-        "SCRIPT_CAP_REQUIRED",
-        "A script needs an explicit maxBytes, because its estimate covers only its leading statements",
-        "Plan it again with maxBytes.",
-      )
+      throw new BigQueryError("SCRIPT_CAP_REQUIRED", "A script needs an explicit maxBytes, because its estimate covers only its leading statements", "Plan it again with maxBytes.");
     }
-    return { category: prepared.kind, capEnforceable: false, jobTimeoutSeconds: Math.min(input.jobTimeoutSeconds ?? SCRIPT_TIMEOUT_SECONDS, SCRIPT_TIMEOUT_SECONDS) }
+    return { category: prepared.kind, capEnforceable: false, jobTimeoutSeconds: Math.min(input.jobTimeoutSeconds ?? SCRIPT_TIMEOUT_SECONDS, SCRIPT_TIMEOUT_SECONDS) };
   }
 
   if (prepared.kind === "admin") {
     if (!options.admin.enabled) {
-      throw new BigQueryError("ADMIN_DISABLED", "Admin statements are off by the plugin's admin option", "Ask the user to set admin.enabled to true.")
+      throw new BigQueryError("ADMIN_DISABLED", "Admin statements are off by the plugin's admin option", "Ask the person to set admin.enabled to true.");
     }
     if (options.admin.requireReason && input.reason === undefined) {
-      throw new BigQueryError("ADMIN_REASON_REQUIRED", "An admin plan needs a reason, which the preview shows", "Plan it again with reason.")
+      throw new BigQueryError("ADMIN_REASON_REQUIRED", "An admin plan needs a reason, which the preview shows", "Plan it again with reason.");
     }
   }
 
-  return { category: prepared.kind, capEnforceable: prepared.cap.enforceable, jobTimeoutSeconds: normalTimeout(input, options) }
+  return { category: prepared.kind, capEnforceable: prepared.cap.enforceable, jobTimeoutSeconds: normalTimeout(input, options) };
 }
 
-function normalTimeout(input: ClassifyInput, options: Options): number {
-  return Math.max(1, Math.min(input.jobTimeoutSeconds ?? options.jobTimeoutSeconds, 21_600))
+function normalTimeout(input: { jobTimeoutSeconds?: number }, options: HandlerContext["options"]): number {
+  return Math.max(1, Math.min(input.jobTimeoutSeconds ?? options.jobTimeoutSeconds, 21_600));
 }
 
-function uncappedTimeout(input: ClassifyInput, options: Options): number {
-  return Math.max(1, Math.min(input.jobTimeoutSeconds ?? options.uncappedTimeoutSeconds, options.uncappedTimeoutSeconds))
+function uncappedTimeout(input: { jobTimeoutSeconds?: number }, options: HandlerContext["options"]): number {
+  return Math.max(1, Math.min(input.jobTimeoutSeconds ?? options.uncappedTimeoutSeconds, options.uncappedTimeoutSeconds));
 }
 
 /**
- * Whether the text defines a temporary table, which a dry run does not support (Google's multi-statement page:
- * “Dry runs of `CREATE TEMP TABLE` statements aren't supported”). This reads statement wording only, never a table name;
- * it is used only to name the refusal a failed dry run deserves, never to decide what a statement touches.
+ * Whether the text defines a temporary table, which a dry run does not support (Google's multi-statement page: "Dry
+ * runs of `CREATE TEMP TABLE` statements aren't supported"). This reads statement wording only, never a table name; it
+ * is used only to name the refusal a failed dry run deserves, never to decide what a statement touches.
  */
 export function definesTempTable(sql: string): boolean {
-  const lexed = createLexer().lex(sql)
-  if (!lexed.ok) return false
-  const tokens = significantTokens(lexed.tokens)
+  const lexed = createLexer().lex(sql);
+  if (!lexed.ok) return false;
+  const tokens = significantTokens(lexed.tokens);
   for (let index = 0; index < tokens.length; index += 1) {
-    const word = valueOf(tokens[index])
-    if (word !== "TEMP" && word !== "TEMPORARY") continue
-    if (valueOf(tokens[index + 1]) !== "TABLE") continue
-    for (let back = index - 1; back >= 0 && back >= index - 8; back -= 1) if (valueOf(tokens[back]) === "CREATE") return true
+    const word = valueOf(tokens[index]);
+    if (word !== "TEMP" && word !== "TEMPORARY") continue;
+    if (valueOf(tokens[index + 1]) !== "TABLE") continue;
+    for (let back = index - 1; back >= 0 && back >= index - 8; back -= 1) if (valueOf(tokens[back]) === "CREATE") return true;
   }
-  return false
+  return false;
 }
 
-const valueOf = (token: Token | undefined) => (token !== undefined && (token.kind === "keyword" || token.kind === "identifier") ? token.value.toUpperCase() : undefined)
+const valueOf = (token: ReturnType<typeof significantTokens>[number] | undefined) =>
+  token !== undefined && (token.kind === "keyword" || token.kind === "identifier") ? token.value.toUpperCase() : undefined;
 
 /** Whether the account has a fence at all: `datasets: { allow }`, `{ deny }` or both. `{}` is not a fence. */
-export function hasFence(fence: Fence | undefined): boolean {
-  return fence?.allow !== undefined || fence?.deny !== undefined
+export function hasFence(fence: AccountSettings["fence"]): boolean {
+  return fence?.allow !== undefined || fence?.deny !== undefined;
 }
 
 /** A DDL/DCL target outside the account's dataset fence is refused, like any referenced object (design §5.4). */
-export function assertTargetsFenced(fence: Fence | undefined, targets: readonly Target[]): void {
+export function assertTargetsFenced(fence: AccountSettings["fence"], targets: readonly Target[]): void {
   for (const target of targets) {
-    const object = { project: target.project, dataset: target.dataset, name: target.name, kind: target.kind }
-    if (!isFenced(fence, object)) continue
+    const object = { project: target.project, dataset: target.dataset, name: target.name, kind: target.kind };
+    if (!isFenced(fence, object)) continue;
     throw new BigQueryError(
       "DATASET_FENCED",
       `The ${target.kind} ${target.label} is outside the account's dataset fence`,
-      "Use a dataset the fence allows, or ask the user to change the account's datasets option.",
-    )
+      "Use a dataset the fence allows, or ask the person to change the account's datasets option.",
+    );
   }
 }
 
@@ -159,83 +145,42 @@ export function assertTargetsFenced(fence: Fence | undefined, targets: readonly 
  * The targets a change can be checked on. A fence cannot check what the dry run did not name: a DML (whose only
  * candidates are the unconfirmed `referencedTables`), an `ALTER`/`TRUNCATE`/`LOAD`/`CALL`/`CREATE MODEL` with no target
  * field, a project-level `GRANT`, or a statement whose parts could spoof a resource. Fail closed rather than let the
- * change reach a dataset the fence denies (review bigquery-8 H-1).
+ * change reach a dataset the fence denies.
  */
-export function checkTargets(fence: Fence | undefined, statementType: string, targets: readonly Target[], what: string): void {
+export function checkTargets(fence: AccountSettings["fence"], statementType: string, targets: readonly Target[], what: string): void {
   if (hasFence(fence) && (!targetsVerified(statementType, targets) || targets.some((target) => !targetSafe(target)))) {
     throw new BigQueryError(
       "DATASET_FENCED",
       `The target of the ${what} (${statementType}) cannot be verified against the account's dataset fence`,
-      "Use a statement whose target BigQuery's dry run names (CREATE/DROP TABLE or VIEW, GRANT/REVOKE, a schema or routine), or ask the user to remove the fence. A DML's target is unconfirmed until the live check settles it; run it on an account without a fence, or in the console.",
-    )
+      "Use a statement whose target BigQuery's dry run names (CREATE/DROP TABLE or VIEW, GRANT/REVOKE, a schema or routine), or ask the person to remove the fence.",
+    );
   }
-  assertTargetsFenced(fence, targets)
+  assertTargetsFenced(fence, targets);
 }
 
-/** The resources a person's rule sees for a change's targets: a table, view, routine or row policy, or a dataset's tables. */
-export function targetResources(account: string, targets: readonly PlanTarget[]): string[] {
-  const out = new Set<string>()
-  for (const target of targets) {
-    if (!targetSafe(target)) continue
-    if (target.kind === "dataset") out.add(tableResource(account, target.project, target.dataset, "*"))
-    else if (target.kind === "table" || target.kind === "view" || target.kind === "routine" || target.kind === "row access policy") {
-      out.add(tableResource(account, target.project, target.dataset, target.name))
-    }
-  }
-  return [...out]
-}
-
-/** §5.4's second fence for a change: each target as a resource, so a person's rule on `*.hr.*` refuses it too. */
-export async function assertChangeTargets(input: {
-  readonly call: Call
-  readonly account: string
-  readonly action: string
-  readonly via: string
-  readonly targets: readonly Target[]
-  /** Objects the change reads (a script's later statements), checked too; never shown as the change's targets. */
-  readonly references?: readonly Target[]
-}): Promise<void> {
-  const resources = targetResources(input.account, [...input.targets, ...(input.references ?? [])])
-  if (resources.length === 0) return
-  await input.call.assert({
-    action: input.action,
-    resources,
-    metadata: {
-      account: input.account,
-      tool: input.via,
-      targets: input.targets.map((target) => target.label),
-      ...(input.references !== undefined && input.references.length > 0 ? { references: input.references.map((target) => target.label) } : {}),
-    },
-  })
-}
-
-/**
- * The referenced objects as the plan's output shows them: what the dry run and expansion saw, each with its facts. A
- * native table's row-access verdict comes from package C's own prober, whose 10-minute cache the read guards filled, so
- * the preview states it without a second check (design §5.2).
- */
+/** The referenced objects as the plan's output shows them, with the facts the dry run and expansion saw. */
 export async function referencedRecords(prepared: PreparedRead, context: HandlerContext): Promise<Record<string, unknown>[]> {
-  const out: Record<string, unknown>[] = []
+  const out: Record<string, unknown>[] = [];
   const prober = new RowPolicyProber(
-    { ports: context.ports, account: context.account, project: prepared.project, signal: context.call.signal },
+    { ports: context.ports, account: context.account, project: prepared.project, signal: context.signal },
     cacheOf<RowVerdict>(context.ports.clock, "rowpolicy", 10 * 60_000, () => context.ports.clock.now()),
-  )
-  for (const facts of prepared.tables) out.push(tableRecord("table", facts, await rowVerdict(prober, facts)))
-  for (const facts of prepared.views) out.push(tableRecord("view", facts))
+  );
+  for (const facts of prepared.tables) out.push(tableRecord("table", facts, await rowVerdict(prober, facts)));
+  for (const facts of prepared.views) out.push(tableRecord("view", facts));
   for (const routine of prepared.routines) {
-    const ref = routine.routineReference
+    const ref = routine.routineReference;
     out.push({
       kind: "routine",
       name: `${ref.projectId}.${ref.datasetId}.${ref.routineId}`,
       type: routine.routineType ?? "",
       language: routine.language ?? "",
       remote: routine.remoteFunctionOptions !== undefined,
-    })
+    });
   }
   for (const graph of prepared.statistics.referencedPropertyGraphs ?? []) {
-    out.push({ kind: "property graph", name: `${graph.projectId}.${graph.datasetId}.${graph.propertyGraphId}` })
+    out.push({ kind: "property graph", name: `${graph.projectId}.${graph.datasetId}.${graph.propertyGraphId}` });
   }
-  return out
+  return out;
 }
 
 function tableRecord(kind: "table" | "view", facts: PreparedRead["tables"][number], rowSecured?: boolean | "unknown"): Record<string, unknown> {
@@ -249,32 +194,31 @@ function tableRecord(kind: "table" | "view", facts: PreparedRead["tables"][numbe
     ...(rowSecured !== undefined ? { rowSecured } : {}),
     bytes: facts.numBytes,
     ...(facts.whyNotNative !== undefined ? { whyNotNative: facts.whyNotNative } : {}),
-  }
+  };
 }
 
 /** A native data table's row-access verdict; a view, an external table or an unknown type has no policy of its own. */
 async function rowVerdict(prober: RowPolicyProber, facts: PreparedRead["tables"][number]): Promise<boolean | "unknown" | undefined> {
-  if (facts.kind !== "data" || facts.storage !== "native") return undefined
-  const verdict = await prober.probe(facts)
-  return verdict.state === "secured" ? true : verdict.state === "unknown" ? "unknown" : false
+  if (facts.kind !== "data" || facts.storage !== "native") return undefined;
+  const verdict = await prober.probe(facts);
+  return verdict.state === "secured" ? true : verdict.state === "unknown" ? "unknown" : false;
 }
 
-/** The plan's referenced names, in the store's `PlanPreview.referenced` shape. */
+/** The plan's referenced names. */
 function referencedNames(prepared: PreparedRead): string[] {
   return [
     ...prepared.tables.map((facts) => facts.name),
     ...prepared.views.map((facts) => facts.name),
     ...prepared.routines.map((routine) => `${routine.routineReference.projectId}.${routine.routineReference.datasetId}.${routine.routineReference.routineId}`),
     ...(prepared.statistics.referencedPropertyGraphs ?? []).map((graph) => `${graph.projectId}.${graph.datasetId}.${graph.propertyGraphId}`),
-  ]
+  ];
 }
 
-/** `bigquery_plan`'s handler. */
-export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
-  const requested = input.maxBytes !== undefined ? bytesOf(input.maxBytes) : undefined
-  const rc = readContext({ ports: context.ports, options: context.options, account: context.account, call: context.call, via: "bigquery_plan" })
-
-  let prepared: PreparedRead
+/** The targets and the statement, checked together against the account's fence. */
+async function inspected(input: PlanInput, context: HandlerContext): Promise<{ prepared: PreparedRead; targets: Target[]; references: Target[]; script?: ScriptStatementInput[] }> {
+  const requested = input.maxBytes !== undefined ? bytesOf(input.maxBytes) : undefined;
+  const rc = readContext({ ports: context.ports, options: context.options, account: context.account, sessionID: context.sessionID, signal: context.signal, via: "plan" });
+  let prepared: PreparedRead;
   try {
     prepared = await prepareRead(
       rc,
@@ -286,25 +230,24 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
         ...(requested !== undefined ? { maxBytes: requested } : {}),
       },
       "inspect",
-    )
+    );
   } catch (error) {
-    // A dry run cannot analyse CREATE TEMP TABLE (Google's multi-statement page, cited in definesTempTable). BigQuery
-    // answers SQL_INVALID; the wording check names the refusal the design asks for.
+    // A dry run cannot analyse CREATE TEMP TABLE. BigQuery answers SQL_INVALID; the wording check names the refusal.
     if (error instanceof BigQueryError && error.code === "SQL_INVALID" && definesTempTable(input.sql)) {
       throw new BigQueryError(
         "SCRIPT_NOT_DRY_RUNNABLE",
         "The script creates a temporary table, and BigQuery's dry runs do not support CREATE TEMP TABLE",
         "Replace the temporary table with a CTE or a dataset table, then plan again.",
-      )
+      );
     }
-    throw error
+    throw error;
   }
 
-  const statistics = prepared.statistics
-  const wholeTargets = targetsOf(statistics, prepared.statementType, statistics.referencedTables ?? [])
-  let script: ScriptStatementInput[] | undefined
-  let targets: Target[]
-  let references: Target[] = []
+  const statistics = prepared.statistics;
+  const wholeTargets = targetsOf(statistics, prepared.statementType, statistics.referencedTables ?? []);
+  let script: ScriptStatementInput[] | undefined;
+  let targets: Target[];
+  let references: Target[] = [];
   if (prepared.statementType === "SCRIPT") {
     script = await scriptStatements({
       ports: context.ports,
@@ -312,57 +255,61 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
       project: prepared.project,
       location: prepared.location,
       ...(prepared.params !== undefined ? { params: prepared.params } : {}),
-      signal: context.call.signal,
+      signal: context.signal,
       sql: input.sql,
-    })
+    });
     for (const statement of script) {
       if (!statement.determined) {
         if (hasFence(rc.settings.fence)) {
           throw new BigQueryError(
             "DATASET_FENCED",
             "One of the script's statements could not be dry-run on its own, so its target cannot be verified against the account's dataset fence",
-            "Split the script into statements, replace variables or temporary tables with dataset tables, or ask the user to remove the fence.",
-          )
+            "Split the script into statements, replace variables or temporary tables with dataset tables, or ask the person to remove the fence.",
+          );
         }
-        continue
+        continue;
       }
       if (statement.sourceMissing && hasFence(rc.settings.fence)) {
         throw new BigQueryError(
           "DATASET_FENCED",
           "One of the script's statements copies or clones a table whose source cannot be verified against the account's dataset fence",
-          "Name the CLONE or COPY source with a project, dataset and table (backquoted where it needs to be), or ask the user to remove the fence.",
-        )
+          "Name the CLONE or COPY source with a project, dataset and table (backquoted where it needs to be), or ask the person to remove the fence.",
+        );
       }
-      checkTargets(rc.settings.fence, statement.type, statement.targets, "statement")
-      assertTargetsFenced(rc.settings.fence, statement.references)
+      checkTargets(rc.settings.fence, statement.type, statement.targets, "statement");
+      assertTargetsFenced(rc.settings.fence, statement.references);
     }
-    assertTargetsFenced(rc.settings.fence, wholeTargets)
-    targets = unionTargets(wholeTargets, ...script.map((statement) => statement.targets))
-    references = unionTargets(...script.map((statement) => statement.references))
+    assertTargetsFenced(rc.settings.fence, wholeTargets);
+    targets = unionTargets(wholeTargets, ...script.map((statement) => statement.targets));
+    references = unionTargets(...script.map((statement) => statement.references));
   } else {
-    // A server-named DDL/DCL target is exact; a DML's `referencedTables` are its reads, not its destination, so the
-    // statement's own leading keywords name the destination when the server names none. A CLONE/COPY source is a target
-    // too, and a fence refuses when it cannot be read (review #8 R-1).
-    const sources = statementSources(input.sql, prepared.statementType, prepared.project)
+    const sources = statementSources(input.sql, prepared.statementType, prepared.project);
     if (sources.required && sources.targets.length === 0 && hasFence(rc.settings.fence)) {
       throw new BigQueryError(
         "DATASET_FENCED",
         "The source of the statement's CLONE or COPY clause cannot be verified against the account's dataset fence",
-        "Name the source with a project, dataset and table (backquoted where it needs to be), or ask the user to remove the fence.",
-      )
+        "Name the source with a project, dataset and table (backquoted where it needs to be), or ask the person to remove the fence.",
+      );
     }
-    targets = changeTargets(wholeTargets, statementTarget(input.sql, prepared.statementType, prepared.project), sources.targets)
-    checkTargets(rc.settings.fence, prepared.statementType, targets, "statement")
+    targets = changeTargets(wholeTargets, statementTarget(input.sql, prepared.statementType, prepared.project), sources.targets);
+    checkTargets(rc.settings.fence, prepared.statementType, targets, "statement");
   }
-  await assertChangeTargets({ call: context.call, account: context.account, action: actionOf("plan").action, via: "bigquery_plan", targets, ...(references.length > 0 ? { references } : {}) })
+  return { prepared, targets, references, ...(script === undefined ? {} : { script }) };
+}
 
+/** The preview's shared part, and the statement the commit re-checks. */
+async function classifyAndPreview(input: PlanInput, context: HandlerContext, category: Category | "uncapped-read"): Promise<{ prepared: PreparedRead; targets: Target[]; script?: ScriptStatementInput[]; classification: Classification; statement: PlannedStatement; output: Record<string, unknown> }> {
+  const requested = input.maxBytes !== undefined ? bytesOf(input.maxBytes) : undefined;
+  const { prepared, targets, references, script } = await inspected(input, context);
   const classification = classify(prepared, context.options, {
     ...(requested !== undefined ? { requestedBytes: requested } : {}),
     ...(input.jobTimeoutSeconds !== undefined ? { jobTimeoutSeconds: input.jobTimeoutSeconds } : {}),
     ...(input.reason !== undefined ? { reason: input.reason } : {}),
-  })
+  });
+  if (classification.category !== category) throw wrongPlanner(category, classification.category);
+
   const bound = boundSentence({
-    category: classification.category,
+    category: classification.category as Category,
     statementType: prepared.statementType,
     capEnforceable: classification.capEnforceable,
     ...(prepared.cap.whyNot !== undefined ? { capWhyNot: prepared.cap.whyNot } : {}),
@@ -370,44 +317,27 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
     effects: prepared.effects,
     ...(input.reason !== undefined ? { reason: input.reason } : {}),
     ...(targets.some((target) => target.source === "referenced") ? { referencedTargets: true } : {}),
-  })
+  });
 
   const cap = await capAndBudget({
     options: context.options,
     ports: context.ports,
     account: context.account,
-    session: sessionHash(context.call.sessionID),
+    session: sessionHash(context.sessionID),
     now: context.ports.clock.now(),
     estimateBytes: prepared.bytes,
     ...(requested !== undefined ? { requested } : {}),
-  })
+  });
   if (prepared.bytes > cap.capBytes) {
     throw new BigQueryError(
       "COST_CAP",
       `The estimate is ${prepared.bytes} bytes and the cap is ${cap.capBytes} bytes${cap.remainingBytes !== undefined ? ` (the budget leaves ${cap.remainingBytes})` : ""}`,
       `Narrow the statement, or pass maxBytes up to the account's maxBytesCeiling of ${context.options.maxBytesCeiling} bytes.`,
-    )
+    );
   }
 
-  // A plan that would commit needs the write level; an uncapped-read plan runs from either level. The decision is
-  // Google's, through package A; on a Read record it makes no Google call.
-  const level = await context.ports.auth.level(context.account, context.call.signal)
-  const committable = classification.category === "uncapped-read" || level.level === "write"
-
-  const scriptText = script !== undefined ? scriptSummary(script) : undefined
-  const reason = [input.reason, scriptText].filter((value): value is string => value !== undefined && value.length > 0).join(" ")
-  const preview: PlanPreview = {
-    category: classification.category,
-    statementType: prepared.statementType,
-    targets: targets.map((target) => target.label),
-    referenced: [...new Set([...referencedNames(prepared), ...references.map((reference) => reference.label)])],
-    bytes: prepared.bytes,
-    accuracy: prepared.accuracy ?? "not reported",
-    usd: usdFor(prepared.bytes, context.options),
-    capBytes: cap.capBytes,
-    bound,
-    ...(reason.length > 0 ? { reason } : {}),
-  }
+  const scriptText = script !== undefined ? scriptSummary(script) : undefined;
+  const reason = [input.reason, scriptText].filter((value): value is string => value !== undefined && value.length > 0).join(" ");
   const statement: PlannedStatement = {
     sql: input.sql,
     ...(input.params !== undefined ? { params: input.params } : {}),
@@ -419,38 +349,60 @@ export const plan: NonNullable<Handlers["plan"]> = async (input, context) => {
     capBytes: cap.capBytes,
     capEnforceable: classification.capEnforceable,
     jobTimeoutSeconds: classification.jobTimeoutSeconds,
-  }
-  const created: Plan = context.ports.plans.create({
+  };
+  const output = {
+    kind: "plan",
     category: classification.category,
-    account: context.account,
-    sessionId: context.call.sessionID,
-    agentId: context.call.agent,
-    statement,
-    preview,
-    committable,
-    ttlSeconds: context.options.planTtlSeconds,
-    ...(script !== undefined ? { script: { statements: script } } : {}),
-  } as unknown as Parameters<typeof context.ports.plans.create>[0])
-
-  const output: OutputOf<"plan"> = {
-    state: "done",
-    planId: created.id,
-    category: created.category,
-    committable,
-    commitWith: commitCall(created.category),
-    preview: {
-      statementType: preview.statementType,
-      targets: [...preview.targets],
-      referenced: script === undefined ? await referencedRecords(prepared, context) : [...(await referencedRecords(prepared, context)), ...references.map((reference) => ({ kind: reference.kind, name: reference.label, via: "script statement" }))],
-      bytes: preview.bytes,
-      accuracy: preview.accuracy,
-      usd: preview.usd,
-      capBytes: preview.capBytes,
-      bound: preview.bound,
-      ...(preview.reason !== undefined ? { reason: preview.reason } : {}),
-    },
-    expiresAt: new Date(created.expiresAt).toISOString(),
+    statementType: prepared.statementType,
+    targets: [...new Set(targets.map((target) => target.label))].slice(0, 20),
+    referenced: [...new Set([...referencedNames(prepared), ...references.map((reference) => reference.label)])],
+    bytes: prepared.bytes,
+    accuracy: prepared.accuracy ?? "not reported",
+    usd: usdFor(prepared.bytes, context.options),
+    capBytes: cap.capBytes,
+    bound,
+    ...(reason.length > 0 ? { reason } : {}),
     ...(cap.warnings.length > 0 ? { warnings: cap.warnings.map((warning) => ({ ...warning })) } : {}),
+  };
+  return { prepared, targets, ...(script === undefined ? {} : { script }), classification, statement, output };
+}
+
+/** The refusal a planner gives a statement of another class: it names the method that takes it. */
+function wrongPlanner(wanted: Category | "uncapped-read", found: Category | "uncapped-read"): BigQueryError {
+  const name = found === "uncapped-read" ? "plan_query" : PLANNER[found];
+  return new BigQueryError(
+    "CATEGORY_MISMATCH",
+    `The statement is a ${found} change, and this planner makes ${wanted} plans`,
+    `Plan it with ${name}, show the person that preview, then commit with the method it names.`,
+  );
+}
+
+/** One change's plan: the preview, the committing method and the statement the commit re-checks. */
+export async function planChange(category: Category, input: PlanInput, context: HandlerContext): Promise<Record<string, unknown>> {
+  const { script, statement, output } = await classifyAndPreview(input, context, category);
+  const change: PlannedChange = { category, account: context.account, sessionID: context.sessionID, statement, ...(output.reason !== undefined ? { reason: String(output.reason) } : {}), ...(script === undefined ? {} : { script: { statements: script } }) };
+  return {
+    method: COMMITTER[category],
+    output,
+    changes: (output.targets as string[]).slice(0, 20),
+    cost: { bytes: statement.estimateBytes, usd: usdFor(statement.estimateBytes, context.options), capBytes: statement.capBytes },
+    trust: "untrusted",
+    change,
+  };
+}
+
+/** The uncapped read's plan: committed by `run_query`, with the short time limit a cap-unenforceable read gets. */
+export async function planQuery(input: PlanInput, context: HandlerContext): Promise<Record<string, unknown>> {
+  const { statement, output } = await classifyAndPreview(input, context, "uncapped-read");
+  if (context.options.uncappedReads === "refuse") {
+    throw new BigQueryError("CAP_NOT_ENFORCEABLE", "This account refuses reads the byte cap cannot bound", "Narrow the query to native tables without row access policies, or ask the person to set uncappedReads to ask.");
   }
-  return output
+  const query: PlannedRead = { account: context.account, sessionID: context.sessionID, statement };
+  return {
+    method: "run_query",
+    output,
+    cost: { bytes: statement.estimateBytes, usd: usdFor(statement.estimateBytes, context.options), capBytes: statement.capBytes },
+    trust: "untrusted",
+    query,
+  };
 }

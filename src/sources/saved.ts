@@ -13,13 +13,11 @@
  * - `saved_list` dry-runs each query with `jobs.query` (`dryRun: true`, free, the bind-time estimate) so the person sees
  *   the SQL and its estimate, not just its name.
  */
-import { cut } from "@we-the-rebel-alliance/source-contract/events"
 import { BigQueryError } from "../domain/errors.js"
 import { usdFor } from "../guards/cost.js"
-import { readContext, prepareRead, runRead } from "../guards/read.js"
+import { prepareRead, readContext, runRead } from "../guards/read.js"
 import { settingsOf } from "../guards/settings.js"
-import { assertSourceReads, SAVED_SOURCE } from "./assert.js"
-import { sourceError, sourceErrorOf } from "./errors.js"
+import { sourceError } from "./errors.js"
 import type { SourceDeps } from "./events.js"
 
 /**
@@ -97,7 +95,6 @@ export async function savedRead(deps: SourceDeps, name: string, scope?: Readonly
       "Choose one of the names saved_list offers, or add it to the plugin's savedQueries option.",
     )
   }
-  await assertSourceReads(deps, SAVED_SOURCE, SAVED_OPERATIONS)
   if (saved.allowUncached !== true && NON_CACHEABLE.test(saved.sql)) {
     throw sourceError(
       "INPUT_INVALID",
@@ -105,35 +102,30 @@ export async function savedRead(deps: SourceDeps, name: string, scope?: Readonly
       "Set allowUncached: true on the saved query if that is intended, or remove the function.",
     )
   }
-  const rc = readContext({ ports: deps.ports, options: deps.options, account: deps.account, call: deps.call, via: "saved_read" })
-  let prepared
-  try {
-    prepared = await prepareRead(
-      rc,
-      {
-        sql: saved.sql,
-        ...(saved.project !== undefined ? { project: saved.project } : {}),
-        ...(saved.location !== undefined ? { location: saved.location } : {}),
-        maxBytes: saved.maxBytes ?? DEFAULT_MAX_BYTES,
-        useCache: true,
-      },
-      "read",
-    )
-  } catch (error) {
-    throw sourceErrorOf(error)
-  }
+  const rc = readContext({ ports: deps.ports, options: deps.options, account: deps.account, sessionID: deps.sessionID, signal: deps.signal, via: "saved_read" })
+  const prepared = await prepareRead(
+    rc,
+    {
+      sql: saved.sql,
+      ...(saved.project !== undefined ? { project: saved.project } : {}),
+      ...(saved.location !== undefined ? { location: saved.location } : {}),
+      maxBytes: saved.maxBytes ?? DEFAULT_MAX_BYTES,
+      useCache: true,
+    },
+    "read",
+  )
   const run = await runRead(rc, prepared, { maxRows: MAX_ROWS + 1, waitSeconds: 30 })
   if (run.state === "running") {
     throw sourceError("UNAVAILABLE", `The saved query ${nameOf(name)} did not finish within 30 seconds.`, "Make the query cheaper, or run it in the Google Cloud console.")
   }
   if (run.state === "failed") {
-    throw sourceErrorOf(new BigQueryError(run.failure!.code, run.failure!.detail, run.failure!.next))
+    throw new BigQueryError(run.failure!.code, run.failure!.detail, run.failure!.next)
   }
   if (run.inline === false) {
     throw sourceError(
       "INPUT_INVALID",
       `The saved query ${nameOf(name)} reads a policy-tagged table or a dataset the account keeps out of results, so its rows cannot be read as a source.`,
-      "Change the query to read native tables without policy tags, or read it with bigquery_query and save the result.",
+      "Change the query to read native tables without policy tags, or read it with query and save the result.",
     )
   }
   const columns = run.columns ?? []
@@ -158,31 +150,30 @@ export async function savedRead(deps: SourceDeps, name: string, scope?: Readonly
   }
 }
 
+/** At most `max` characters, ending in `…` when cut (the labels a person confirms are short). */
+const cut = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`)
+
+/** A price as a person reads it. */
+const formatUsd = (value: number) => `$${value.toFixed(value < 0.01 ? 4 : 2)}`;
+
 /** One option `saved_list` offers: the name, and the query it runs. */
 export interface SavedOption {
   readonly id: string
   readonly label: string
 }
 
-/** What `saved_list` answers: the kit's `options`, and the descriptor's `queries` with their estimates. */
+/** What `saved_list` answers: the contract's `options`, each with its SQL and free estimate in the label. */
 export interface SavedListAnswer {
-  readonly options: readonly SavedOption[]
-  readonly queries: readonly { readonly name: string; readonly sql: string; readonly bytes?: number; readonly costUsd?: number }[]
-  readonly trust: "untrusted"
+  readonly options: readonly SavedOption[];
 }
 
 /** The bind-time suggestion: each saved query with its SQL and a free `jobs.query` dry run's estimate. */
 export async function savedList(deps: SourceDeps): Promise<SavedListAnswer> {
-  if (deps.account === "*") {
-    throw sourceError("INPUT_INVALID", "The call named no account, and this plugin has several.", "Pass the account saved_list should estimate for.")
-  }
-  await assertSourceReads(deps, SAVED_SOURCE, SUGGEST_OPERATIONS)
-  const settings = settingsOf(deps.options, deps.account)
-  const options: SavedOption[] = []
-  const queries: { name: string; sql: string; bytes?: number; costUsd?: number }[] = []
+  const settings = settingsOf(deps.options, deps.account);
+  const options: SavedOption[] = [];
   for (const [name, saved] of Object.entries(deps.options.savedQueries).slice(0, 64)) {
-    const project = saved.project ?? settings.billingProject
-    let estimate: { readonly statementType?: string; readonly totalBytesProcessed?: number } | undefined
+    const project = saved.project ?? settings.billingProject;
+    let estimate: { readonly statementType?: string; readonly totalBytesProcessed?: number } | undefined;
     if (project !== undefined) {
       try {
         estimate = await deps.ports.bigquery.estimate(
@@ -192,20 +183,16 @@ export async function savedList(deps: SourceDeps): Promise<SavedListAnswer> {
             sql: saved.sql,
             ...(saved.location !== undefined ? { location: saved.location } : settings.location !== undefined ? { location: settings.location } : {}),
           },
-          deps.call.signal,
-        )
+          deps.signal,
+        );
       } catch (error) {
         // A query with a syntax error is still listed, so the person can see and fix it: the estimate is omitted.
-        if (!(error instanceof BigQueryError)) throw error
+        if (!(error instanceof BigQueryError)) throw error;
       }
     }
-    const bytes = estimate?.totalBytesProcessed
-    options.push({ id: name, label: cut(`${name}: ${saved.sql.replace(/\s+/g, " ")}`, 190) })
-    queries.push({
-      name,
-      sql: cut(saved.sql, 500),
-      ...(bytes !== undefined ? { bytes, costUsd: usdFor(bytes, deps.options) } : {}),
-    })
+    const bytes = estimate?.totalBytesProcessed;
+    const cost = bytes !== undefined ? ` — ${formatUsd(usdFor(bytes, deps.options))}` : "";
+    options.push({ id: name, label: cut(`${name}: ${saved.sql.replace(/\s+/g, " ") || "(no SQL)"}${cost}`, 190) });
   }
-  return { options, queries, trust: "untrusted" }
+  return { options };
 }

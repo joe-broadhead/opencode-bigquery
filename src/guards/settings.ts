@@ -3,9 +3,10 @@
  * fence and its inline deny list. The registry has already resolved the alias, so a missing account here is a bug; it
  * still fails closed with `ACCOUNT_UNKNOWN`.
  */
-import { accountsOf, type Options } from "../options.js"
+
 import { BigQueryError } from "../domain/errors.js"
 import type { Level } from "../domain/levels.js"
+import { accountsOf, type Options } from "../options.js"
 
 export interface Fence {
   readonly allow?: readonly string[]
@@ -43,7 +44,7 @@ export function projectOf(settings: AccountSettings, requested: string | undefin
     throw new BigQueryError(
       "BILLING_PROJECT_REQUIRED",
       `The account ${settings.alias} has no billing project, and the call named none`,
-      "Call bigquery_list to see the projects, then set billingProject on the account.",
+      "Call list to see the projects, then set billingProject on the account.",
     )
   }
   return project

@@ -10,10 +10,11 @@
  * confidential, so it never appears in a paid field), and the redirect URI and callback port of a host that serves
  * OpenCode to a browser on another machine (an app's relay, design §3.2).
  */
+import { accountName } from "@we-the-rebel-alliance/plugin-contract/accounts"
 import { BigQueryError } from "../domain/errors.js"
 import { DISCLOSURE, type Level, scopesFor } from "../domain/levels.js"
-import { clientFromForm, parseClientJson, type OAuthClient } from "./client.js"
-import { resolveRedirect, type Redirect } from "./redirect.js"
+import { clientFromForm, type OAuthClient, parseClientJson } from "./client.js"
+import { type Redirect, resolveRedirect } from "./redirect.js"
 
 interface FieldBase {
   readonly key: string
@@ -47,15 +48,9 @@ export interface BooleanField extends FieldBase {
 export type SignInField = StringField | IntegerField | BooleanField
 export type SignInForm = readonly SignInField[]
 
-/** `bigquery-<alias>`: the integration the package declaration's `signIns[0].integration` names and `/connect` shows. */
+/** The integration one alias signs in to: `bigquery` for `default`, `bigquery-<alias>` otherwise (contract §5). */
 export function integrationIdFor(alias: string): string {
-  return `bigquery-${/^[a-z][a-z0-9-]*$/.test(alias) ? alias : "account"}`
-}
-
-/** The name `/connect` shows; with several interactive accounts each is named, so two sign-ins cannot be confused. */
-export function integrationNames(accounts: Readonly<Record<string, { readonly mode: string }>>): Map<string, string> {
-  const interactive = Object.keys(accounts).filter((alias) => accounts[alias]?.mode === "interactive")
-  return new Map(interactive.map((alias) => [alias, interactive.length > 1 ? `Google Cloud (BigQuery) — ${alias}` : "Google Cloud (BigQuery)"]))
+  return accountName("bigquery", /^[a-z][a-z0-9]{0,31}$/.test(alias) ? alias : "account")
 }
 
 /** The scopes a sign-in requests: the level's, plus the account's extra `scopes` option, in that order. */

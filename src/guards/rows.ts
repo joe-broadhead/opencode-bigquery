@@ -2,21 +2,21 @@
  * The row gate (review H-1): every path that returns rows to a model passes it, so the policy-tag rule (Q6) and the
  * account's inline option (Q11) are decided in one place instead of once per tool.
  *
- * - `bigquery_query` and `bigquery_profile` reach it through `runRead`, with the verdict `prepareRead` made from the
+ * - `query` and `profile` reach it through `runRead`, with the verdict `prepareRead` made from the
  *   tables BigQuery's dry runs named (the query's own and every expanded view and routine body's).
- * - `bigquery_job` reaches it with the job's referenced objects: the verdict of a query this process prepared when the
+ * - `job` reaches it with the job's referenced objects: the verdict of a query this process prepared when the
  *   job is that query's, and otherwise a fail-closed one — any tagged column in a referenced table, a view or routine,
  *   a script, or a cache hit that names nothing means no inline rows.
- * - `bigquery_table`'s sample reaches it for the inline option; its tagged columns are withheld by construction.
+ * - `table`'s sample reaches it for the inline option; its tagged columns are withheld by construction.
  *
  * The dataset fence is a separate check, in `assertFenced`, and every path that can return a fenced object's rows calls
  * it before this.
  */
 import type { Options } from "../options.js"
-import { settingsOf, type AccountSettings } from "./settings.js"
-import type { PolicyVerdict } from "./policy.js"
-import type { TableFacts } from "./tables.js"
 import type { Warning } from "./cost.js"
+import type { PolicyVerdict } from "./policy.js"
+import { type AccountSettings, settingsOf } from "./settings.js"
+import type { TableFacts } from "./tables.js"
 
 export interface RowGate {
   readonly inline: boolean

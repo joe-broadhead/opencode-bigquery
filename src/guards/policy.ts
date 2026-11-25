@@ -10,12 +10,12 @@
  * query reads no tagged column, and the rule is conservative:
  *
  * - when any table in that set (a base table reached through a view or a routine included) has a policy-tagged column,
- *   the answer has no inline rows, warns `POLICY_TAGGED_SOURCE`, and points at `bigquery_save` (the file stays local);
+ *   the answer has no inline rows, warns `POLICY_TAGGED_SOURCE`, and points at `save` (the file stays local);
  * - otherwise rows come inline;
  * - the person's `policyTagged: "allow"` option turns the rule off. No tool input can.
  *
- * A query naming only untagged columns of a tagged table is therefore save-only too. `bigquery_table`'s sample
- * withholds the tagged columns exactly, and `bigquery_profile` over a table builds its own SQL from the schema, so both
+ * A query naming only untagged columns of a tagged table is therefore save-only too. `table`'s sample
+ * withholds the tagged columns exactly, and `profile` over a table builds its own SQL from the schema, so both
  * can still show the untagged columns inline.
  *
  * A name in a message is a validated identifier (`path`), never the name the data chose.

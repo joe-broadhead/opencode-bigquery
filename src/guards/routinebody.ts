@@ -18,8 +18,9 @@
  * routine unresolved, so the read goes to a plan. A substitution that makes the body invalid fails the dry run, which is
  * unresolved too: nothing is assumed.
  */
-import type { Lexer, Token } from "../domain/lexer-api.js"
+
 import type { RoutineInfo } from "../domain/google.js"
+import type { Lexer, Token } from "../domain/lexer-api.js"
 import { quoteIdent } from "./sql.js"
 
 /** The scalar `typeKind` values of Google's `StandardSqlDataType`, written as GoogleSQL writes them. */

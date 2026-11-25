@@ -16,8 +16,8 @@ import type { QueryParameter } from "../domain/google.js"
 import type { Token } from "../domain/lexer-api.js"
 import { rethrowCallFailure } from "../guards/callerrors.js"
 import { createLexer, significantTokens } from "../guards/lexer.js"
-import { changeTargets, referencesOf, sameTargets, targetsOf, type Target } from "./statistics.js"
 import { statementSources, statementTarget } from "./statement-target.js"
+import { changeTargets, referencesOf, sameTargets, type Target, targetsOf } from "./statistics.js"
 
 /** How many statements a script may have for its preview and its per-statement targets. */
 export const MAX_SCRIPT_STATEMENTS = 64
@@ -62,7 +62,7 @@ export function splitStatements(sql: string): string[] {
     throw new BigQueryError(
       "SQL_INVALID",
       `The lexer found ${lexed.error.what} at line ${lexed.error.line}, column ${lexed.error.column}`,
-      "Fix the SQL at that position; bigquery_table shows the names.",
+      "Fix the SQL at that position; table shows the names.",
     )
   }
   const statements: string[] = []

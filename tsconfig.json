@@ -6,9 +6,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "jsx": "preserve",
-    "jsxImportSource": "@opentui/solid",
-    "types": ["node", "bun"]
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/tui/**/*.tsx", "test/unit/**/*.ts", "test/host/**/*.ts", "test/pack/**/*.ts", "test/conformance/**/*.ts", "test/support/**/*.ts", "test/fake/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

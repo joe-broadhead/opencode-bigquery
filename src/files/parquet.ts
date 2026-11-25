@@ -1,5 +1,5 @@
 /**
- * A small, pure-TypeScript Parquet writer for `bigquery_save`'s `parquet` format, which opencode-charts' reader
+ * A small, pure-TypeScript Parquet writer for `save`'s `parquet` format, which opencode-charts' reader
  * (`hyparquet`) reads like any other Parquet file (design §7, §14.1):
  *
  * - one plain-encoded, uncompressed DataPage v1 per column chunk;

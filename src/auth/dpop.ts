@@ -8,12 +8,12 @@
  *
  * Nothing here sends anything: `postToken` in google.ts owns the request and the `DPoP-Nonce` cache.
  */
-import { createHash, createPrivateKey, randomBytes, sign, type JsonWebKey as CryptoJsonWebKey } from "node:crypto"
-import { GOOGLE } from "../domain/google.js"
-import { publicJwk, type DpopKey } from "./keys.js"
-
+import { type JsonWebKey as CryptoJsonWebKey, createHash, createPrivateKey, randomBytes, sign } from "node:crypto"
 /** The token endpoint's URL as the proof's `htu`: the endpoint, without query or fragment. */
-export const TOKEN_HTU = GOOGLE.token
+import { GOOGLE_TOKEN_URL as TOKEN_HTU } from "../provider/endpoints.js"
+import { type DpopKey, publicJwk } from "./keys.js"
+
+export { TOKEN_HTU }
 
 export interface ProofInput {
   /** Unique per request; the code exchange derives it from the code. */

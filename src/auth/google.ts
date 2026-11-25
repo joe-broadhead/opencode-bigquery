@@ -14,21 +14,22 @@
  * Google's error text and code are used only to classify a refusal; they never reach a `message` or `next` (design
  * §5.6). The plugin never calls `/revoke`: Google's revocation is project-wide (§3.1).
  */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+
 import { timingSafeEqual } from "node:crypto"
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { BigQueryError } from "../domain/errors.js"
-import { GOOGLE } from "../domain/google.js"
 import type { Level } from "../domain/levels.js"
+import { GOOGLE_AUTHORIZE, GOOGLE_TOKEN_INFO_URL, GOOGLE_TOKEN_URL } from "../provider/endpoints.js"
+import type { OAuthClient } from "./client.js"
 import { codeJti, dpopProof, randomState, refreshJti } from "./dpop.js"
 import { authorizationInstructions, signInScopes } from "./form.js"
-import { createPkce } from "./pkce.js"
-import type { OAuthClient } from "./client.js"
-import type { Redirect } from "./redirect.js"
 import { type DpopKey, generateKey } from "./keys.js"
+import { createPkce } from "./pkce.js"
+import type { Redirect } from "./redirect.js"
 
-export const TOKEN_ENDPOINT = GOOGLE.token
+export const TOKEN_ENDPOINT = GOOGLE_TOKEN_URL
 /** Google's token-info endpoint, used only to name a `token` account's email (design §10's `probe`). */
-export const TOKENINFO_ENDPOINT = "https://oauth2.googleapis.com/tokeninfo"
+export const TOKENINFO_ENDPOINT = GOOGLE_TOKEN_INFO_URL
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 const MAX_BODY = 64 * 1024
 
@@ -213,7 +214,8 @@ export async function refreshAccessToken(input: {
  * `invalid_grant`, `invalid_client` or `unauthorized_client` is an ordinary refusal, not proof of a device binding
  * (Google's page: "Other failures might return invalid_grant").
  *
- * TODO(L16): record which error code Google's 400 carries for a bound token's missing proof; the live check settles it.
+ * The exact code of Google's 400 for a bound token's missing proof is recorded in docs/architecture.md's known limits;
+ * any invalid_grant here is a sign-in need.
  */
 export async function probeBinding(input: {
   readonly refreshToken: string
@@ -445,7 +447,7 @@ export function buildAuthorizeUrl(input: {
   readonly level: Level
   readonly extraScopes?: readonly string[]
 }): string {
-  const url = new URL(GOOGLE.authorize)
+  const url = new URL(GOOGLE_AUTHORIZE)
   const params = url.searchParams
   params.set("response_type", "code")
   params.set("client_id", input.clientId)
@@ -498,8 +500,8 @@ export function classify(failure: TokenFailure, what: "exchange" | "refresh"): B
 /**
  * `invalid_grant` with a reauthentication subtype, which is how a Workspace Cloud session limit answers (design §3.2, M8).
  *
- * TODO(L1): confirm the exact subtype and description Google uses under a Cloud session limit, and that N is the hours
- * it states; a live check under a test OU with a session limit settles both.
+ * The exact subtype, description and hours a Cloud session limit states are in docs/architecture.md's known limits;
+ * any reauthentication subtype is treated as a sign-in need.
  */
 function isReauthentication(failure: TokenFailure): boolean {
   const subtype = failure.subtype ?? ""

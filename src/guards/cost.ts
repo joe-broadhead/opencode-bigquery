@@ -8,8 +8,9 @@
  * much is left. An estimate over the cap answers `COST_CAP` before anything runs, because Google's own check would stop
  * the job at the same number with a different code.
  */
-import { BigQueryError } from "../domain/errors.js"
+
 import type { WarningCode } from "../domain/errors.js"
+import { BigQueryError } from "../domain/errors.js"
 import type { Options } from "../options.js"
 import type { Ports } from "../ports.js"
 

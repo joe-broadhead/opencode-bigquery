@@ -1,5 +1,5 @@
 /**
- * `bigquery.jobs`' cursor (design §10, source-contract's `cursor`): a version 2 bound cursor, so another plugin's,
+ * `bigquery.jobs`' cursor (design §10, the contract's `cursor`): a version 2 bound cursor, so another plugin's,
  * source's, account's or scope's cursor is `CURSOR_INVALID` before anything is read. Its state is this plugin's own
  * (the codec keeps `v`, `s` and `b` for itself). Every time is milliseconds on **Google's** clock unless it says host.
  *
@@ -27,8 +27,8 @@
  * 13-digit times, a project index and a hash, measured at under 1,024 in test/unit/sources/clock.test.ts. A cursor
  * that would not fit fails the page with `UNAVAILABLE` and the cursor waits.
  */
-import { MAX_CURSOR_LENGTH, canonicalScope, decodeBoundCursor, encodeBoundCursor, type Scope } from "@we-the-rebel-alliance/source-contract/cursor"
-import { NAMESPACE } from "../constants.js"
+import { canonicalScope, decodeBoundCursor, encodeBoundCursor, MAX_CURSOR_LENGTH, type Scope } from "@we-the-rebel-alliance/plugin-contract/cursor"
+import { NAME } from "../constants.js"
 import { sourceError } from "./errors.js"
 
 /**
@@ -66,7 +66,7 @@ export interface Binding {
 }
 
 export const bindingOf = (account: string, scope: Scope | undefined): Binding => ({
-  plugin: NAMESPACE,
+  plugin: NAME,
   source: "jobs",
   account,
   ...(scope === undefined ? {} : { scope: canonicalScope(scope) }),
