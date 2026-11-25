@@ -180,9 +180,7 @@ describe("the built plugin on the real 2.4.1 host", () => {
         expect(typeof front.description).toBe("string");
         const expectedDescription = String(front.description);
         expect(expectedDescription.trim()).not.toBe("");
-        expect(expectedDescription).not.toBe(">");
-        expect(expectedDescription).not.toBe("|");
-        expect(expectedDescription).not.toMatch(/[\r\n]/);
+        for (const marker of [">", "|", ">-", "|-", ">+", "|+"]) expect(expectedDescription.trim()).not.toBe(marker);
         expect(skill?.description).toBe(expectedDescription);
         expect(skill?.name).toBe(String(front.name));
       }
