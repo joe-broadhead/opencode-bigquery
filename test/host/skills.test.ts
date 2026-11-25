@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, test } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { manifest } from "../../src/manifest.js";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
@@ -21,6 +22,7 @@ afterAll(() => rmSync(work, { recursive: true, force: true }));
 /** One skill as the host lists it. */
 interface HostSkill {
   readonly id: string;
+  readonly name: string;
   readonly path: string;
   readonly description?: string | null;
   readonly content: string;
@@ -140,6 +142,14 @@ async function untilSkills(host: Awaited<ReturnType<typeof createHost>>["host"],
   }
 }
 
+/** The frontmatter of one SKILL.md, read by a real YAML parser (never by the plugin's own parser). */
+function yamlFrontMatter(id: string): { readonly name?: unknown; readonly description?: unknown } {
+  const text = readFileSync(join(SKILLS, id, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
+  const match = /^---\n([\s\S]*?)\n---\n/.exec(text);
+  if (match === null) throw new Error(`skills/${id}/SKILL.md has no frontmatter block`);
+  return parseYaml(match[1]!) as { readonly name?: unknown; readonly description?: unknown };
+}
+
 function skillDirectories(): string[] {
   return readdirSync(SKILLS, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -162,9 +172,19 @@ describe("the built plugin on the real 2.4.1 host", () => {
         expect(skill, `the host lists no skill ${id}`).toBeDefined();
         // Ours, not another package's skill of the same id: the path is this package's file, and it is filled in.
         expect(skill!.path).toBe(join(SKILLS, id, "SKILL.md"));
-        expect(skill?.description ?? "").not.toBe("");
         expect(skill?.content ?? "").not.toBe("");
         expect(readFileSync(join(SKILLS, id, "SKILL.md"), "utf8")).toContain((skill?.content ?? "").trim().split("\n")[0] ?? "");
+        // The description the host registered is exactly the YAML frontmatter's text, never a block marker: a real YAML
+        // parser reads the file, so the expectation does not come from the plugin's own parser.
+        const front = yamlFrontMatter(id);
+        expect(typeof front.description).toBe("string");
+        const expectedDescription = String(front.description);
+        expect(expectedDescription.trim()).not.toBe("");
+        expect(expectedDescription).not.toBe(">");
+        expect(expectedDescription).not.toBe("|");
+        expect(expectedDescription).not.toMatch(/[\r\n]/);
+        expect(skill?.description).toBe(expectedDescription);
+        expect(skill?.name).toBe(String(front.name));
       }
     } finally {
       await host.close();

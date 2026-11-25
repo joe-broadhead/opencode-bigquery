@@ -1,6 +1,6 @@
 ---
 name: bigquery-sql
-description: GoogleSQL for BigQuery: partition filters, wildcards, QUALIFY, UNNEST, SAFE functions, approximate aggregates, TABLESAMPLE, INFORMATION_SCHEMA and query parameters.
+description: GoogleSQL for BigQuery — partition filters, wildcards, QUALIFY, UNNEST, SAFE functions, approximate aggregates, TABLESAMPLE, INFORMATION_SCHEMA and query parameters.
 ---
 If the `bigquery` tools are absent, sign in first: run `/connect` and choose the BigQuery account.
 

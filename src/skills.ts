@@ -19,6 +19,19 @@ function invalid(message: string): Error {
   return new Error(`The plugin's skills could not be registered: ${message} Next step: fix the skill file and reinstall the plugin.`);
 }
 
+/**
+ * The description must be real one-line text. A YAML folded or literal block (`>`, `|`, `>-`, `|+`) read only by its
+ * first line would register the marker instead of the text, and an agent never sees the skill; it is refused rather
+ * than registered as a placeholder.
+ */
+function oneLineDescription(id: string, value: string | undefined): string {
+  const description = value?.trim() ?? "";
+  if (description === "" || /^[>|][+-]?$/.test(description) || /[\r\n]/.test(description)) {
+    throw invalid(`skills/${id}/SKILL.md needs a one-line description (real text, not a YAML block marker such as > or |).`);
+  }
+  return description;
+}
+
 /** Parses the frontmatter strictly: `name` equal to the directory, a `description`, and a non-empty body. */
 export function parseSkill(id: string, text: string): ParsedSkill {
   const source = text.replace(/\r\n/g, "\n");
@@ -30,14 +43,14 @@ export function parseSkill(id: string, text: string): ParsedSkill {
     if (!field || fields.has(field[1]!)) throw invalid(`skills/${id}/SKILL.md has an invalid frontmatter line: ${line.slice(0, 80)}.`);
     fields.set(field[1]!, field[2]!.trim());
   }
-  const name = fields.get("name");
-  const description = fields.get("description");
-  if (fields.size !== 2 || name !== id || description === undefined || description === "") {
+  const name = fields.get("name")?.trim();
+  if (fields.size !== 2 || name !== id) {
     throw invalid(`skills/${id}/SKILL.md needs exactly a name equal to "${id}" and a description.`);
   }
+  const description = oneLineDescription(id, fields.get("description"));
   const content = match[2]!.trim();
   if (content === "") throw invalid(`skills/${id}/SKILL.md has no content.`);
-  return { name, description, content: match[2]!.trimStart() };
+  return { name: id, description, content: match[2]!.trimStart() };
 }
 
 /** The absolute path the host should show for a skill. */

@@ -35,3 +35,17 @@ describe("skills", () => {
     expect(() => parseSkill("bigquery", "---\nname: bigquery\nname: bigquery\ndescription: x\n---\nbody\n")).toThrow(/invalid frontmatter line/);
   });
 });
+
+describe("description guards", () => {
+  test("a YAML folded block marker is refused, not registered", () => {
+    expect(() => parseSkill("bigquery", "---\nname: bigquery\ndescription: >\n---\nbody\n")).toThrow(/one-line description/);
+  });
+
+  test("a YAML literal block marker is refused", () => {
+    expect(() => parseSkill("bigquery", "---\nname: bigquery\ndescription: |\n---\nbody\n")).toThrow(/one-line description/);
+  });
+
+  test("a whitespace-only description is refused", () => {
+    expect(() => parseSkill("bigquery", "---\nname: bigquery\ndescription:    \n---\nbody\n")).toThrow(/one-line description/);
+  });
+});
