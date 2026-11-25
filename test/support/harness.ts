@@ -96,8 +96,8 @@ export interface Harness {
 }
 
 /** The plugin's parts, with the provider client over the fake hosts. */
-export function harness(raw: Record<string, unknown> = {}): Harness {
-  const google = fakeGoogle()
+export function harness(raw: Record<string, unknown> = {}, fake: { readonly tie?: boolean | undefined } = {}): Harness {
+  const google = fakeGoogle(fake)
   const base: Record<string, unknown> = { accounts: { work: { billingProject: "alpha-analytics" }, personal: { billingProject: "alpha-analytics" } }, savedQueries: { revenue: { sql: "SELECT order_date, total FROM `alpha-analytics.sales.orders` ORDER BY order_date" } }, ...raw }
   const options = loadOptions(base)
   const auth = new TestAuth(ALIASES)

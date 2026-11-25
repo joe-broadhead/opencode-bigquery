@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { PROJECT } from "../support/google.js";
+import { JOBS, PROJECT, TIE_END } from "../support/google.js";
 import { harness, testCall } from "../support/harness.js";
 
 describe("sources", () => {
@@ -25,6 +25,21 @@ describe("sources", () => {
     const next = (await h.handlers.events_list!.run({ source: "jobs", cursor: first.cursor }, testCall("work"))) as Record<string, unknown>;
     expect(next.events).toEqual([]);
     expect(next.account).toBe("work");
+  });
+
+  test("two events with one timestamp split across pages: no skip, no duplicate, no gap", async () => {
+    const h = harness({}, { tie: true });
+    const first = (await h.handlers.events_list!.run({ source: "jobs", limit: 1 }, testCall("work"))) as Record<string, unknown>;
+    const second = (await h.handlers.events_list!.run({ source: "jobs", limit: 1, cursor: first.cursor }, testCall("work"))) as Record<string, unknown>;
+    const events = [...(first.events as { external_id: string; occurred_at: string }[]), ...(second.events as { external_id: string; occurred_at: string }[])];
+    // Both pages carry the same occurred_at: the tie a timestamp-only cursor would lose.
+    expect(new Set(events.map((event) => event.occurred_at))).toEqual(new Set([new Date(TIE_END).toISOString()]));
+    expect(events.map((event) => event.external_id).sort()).toEqual(JOBS.map((job) => `alpha-analytics:US:${job.jobId}`).sort());
+    expect(new Set(events.map((event) => event.external_id)).size).toBe(2);
+    expect(first.more).toBe(true);
+    expect(second.more).toBe(false);
+    expect(first.gap).toBeUndefined();
+    expect(second.gap).toBeUndefined();
   });
 
   test("another account's cursor is refused, never restarted", async () => {

@@ -41,6 +41,9 @@ export interface FakeGoogle {
   readonly requests: Recorded[];
 }
 
+/** The end time two jobs share when `fakeGoogle({ tie: true })` is asked: a tie a page boundary must not lose. */
+export const TIE_END = NOW - 1_700_000;
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", date: new Date(NOW).toUTCString() } });
 
 /** Google's error object: the reason first, as the transport reads it. */
@@ -104,14 +107,14 @@ const JOBS = [
 ];
 
 /** A job resource for a list item or a get: `state` is DONE, the statistics carry the times. */
-function listedJob(job: (typeof JOBS)[number]): Record<string, unknown> {
+function listedJob(job: (typeof JOBS)[number], tie: boolean): Record<string, unknown> {
   return {
     jobReference: { projectId: PROJECT, jobId: job.jobId, location: "US" },
     state: "DONE",
     configuration: { query: { query: `SELECT * FROM \`${PROJECT}.${DATASET}.orders\`` }, labels: { oc_plugin: "bigquery-plugin", oc_tool: job.statementType === "SELECT" ? "query" : "write", oc_session: "0000000000000000" } },
     statistics: {
       creationTime: String(job.created),
-      endTime: String(job.ended),
+      endTime: String(tie ? TIE_END : job.ended),
       query: { statementType: job.statementType, totalBytesProcessed: job.billed, totalBytesBilled: job.billed, cacheHit: false },
     },
     status: { state: "DONE" },
@@ -119,7 +122,7 @@ function listedJob(job: (typeof JOBS)[number]): Record<string, unknown> {
 }
 
 /** The answer to one request, or Google's 404. */
-function answer(request: Recorded): Response {
+function answer(request: Recorded, options: { readonly tie?: boolean | undefined }): Response {
   const url = new URL(request.url);
   const path = url.pathname.replace("/bigquery/v2", "");
   const method = request.method;
@@ -159,7 +162,7 @@ function answer(request: Recorded): Response {
     if (state !== null && state !== "DONE") return json({ jobs: [] });
     const min = Number(url.searchParams.get("minCreationTime") ?? Number.NEGATIVE_INFINITY);
     const max = Number(url.searchParams.get("maxCreationTime") ?? Number.POSITIVE_INFINITY);
-    const jobs = JOBS.filter((job) => job.created >= min && job.created <= max).map((job) => listedJob(job));
+    const jobs = JOBS.filter((job) => job.created >= min && job.created <= max).map((job) => listedJob(job, options.tie === true));
     return json({ kind: "bigquery#jobList", jobs, totalItems: jobs.length });
   }
   const cancel = /^\/projects\/[^/]+\/jobs\/([^/]+)\/cancel$/.exec(path);
@@ -171,7 +174,7 @@ function answer(request: Recorded): Response {
   if (method === "GET" && getJob !== null) {
     const jobId = decodeURIComponent(getJob[1]!);
     const known = JOBS.find((job) => job.jobId === jobId);
-    return known === undefined ? failure(404, "notFound", "Job not found") : json(listedJob(known));
+    return known === undefined ? failure(404, "notFound", "Job not found") : json(listedJob(known, options.tie === true));
   }
   const results = /^\/projects\/[^/]+\/queries\/([^/]+)$/.exec(path);
   if (method === "GET" && results !== null) {
@@ -180,15 +183,18 @@ function answer(request: Recorded): Response {
   return failure(404, "notFound", `The fake has no answer for ${method} ${path}`);
 }
 
-/** A fetch that answers Google's hosts from the fixtures above and records every request. */
-export function fakeGoogle(): FakeGoogle {
+/**
+ * A fetch that answers Google's hosts from the fixtures above and records every request. `tie` makes both listed jobs
+ * end at the same time, so a page boundary between them is a timestamp tie.
+ */
+export function fakeGoogle(options: { readonly tie?: boolean | undefined } = {}): FakeGoogle {
   const requests: Recorded[] = [];
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
     const request = { method: (init?.method ?? "GET").toUpperCase(), url, ...(body === undefined ? {} : { body }) };
     requests.push(request);
-    return answer(request);
+    return answer(request, options);
   };
   return { fetch: fetchImpl as typeof globalThis.fetch, requests };
 }
