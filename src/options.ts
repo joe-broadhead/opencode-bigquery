@@ -122,7 +122,7 @@ export function accountsOf(options: Pick<Options, "accounts">): Readonly<Record<
 /** The dataset id pattern, re-exported for the fence. */
 export { DATASET_ID };
 
-const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.1", "options": { "access": "ask-changes" } }]`;
+const EXAMPLE = `"plugins": [{ "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.0", "options": { "access": "ask-changes" } }]`;
 
 /** The options, parsed with their defaults, or `OPTIONS_INVALID` named by its path. */
 export function loadOptions(raw: unknown): Options {
