@@ -27,19 +27,39 @@ describe("sources", () => {
     expect(next.account).toBe("work");
   });
 
-  test("two events with one timestamp split across pages: no skip, no duplicate, no gap", async () => {
+  /**
+   * Every page of one `since` read, with `limit: 1`, until `more: false`. Every page carries the same `since` and then
+   * its cursor, so a cursor that lost the window and re-applied `since` would repeat an event.
+   */
+  async function pageSinceUntilDone(h: ReturnType<typeof harness>, since: string): Promise<{ pages: Record<string, unknown>[]; events: { external_id: string; occurred_at: string }[] }> {
+    const pages: Record<string, unknown>[] = [];
+    let cursor: string | undefined;
+    for (let read = 0; read < 10; read += 1) {
+      const page = (await h.handlers.events_list!.run({ source: "jobs", since, limit: 1, ...(cursor === undefined ? {} : { cursor }) }, testCall("work"))) as Record<string, unknown>;
+      pages.push(page);
+      expect(page.gap).toBeUndefined();
+      cursor = page.cursor as string;
+      if (page.more === false) return { pages, events: pages.flatMap((entry) => entry.events as { external_id: string; occurred_at: string }[]) };
+    }
+    throw new Error("the read did not reach more: false within 10 pages");
+  }
+
+  test("since plus a page limit: every matching event once, and one timestamp across pages", async () => {
     const h = harness({}, { tie: true });
-    const first = (await h.handlers.events_list!.run({ source: "jobs", limit: 1 }, testCall("work"))) as Record<string, unknown>;
-    const second = (await h.handlers.events_list!.run({ source: "jobs", limit: 1, cursor: first.cursor }, testCall("work"))) as Record<string, unknown>;
-    const events = [...(first.events as { external_id: string; occurred_at: string }[]), ...(second.events as { external_id: string; occurred_at: string }[])];
+    const { pages, events } = await pageSinceUntilDone(h, "2026-11-20T08:00:00Z");
     // Both pages carry the same occurred_at: the tie a timestamp-only cursor would lose.
     expect(new Set(events.map((event) => event.occurred_at))).toEqual(new Set([new Date(TIE_END).toISOString()]));
     expect(events.map((event) => event.external_id).sort()).toEqual(JOBS.map((job) => `alpha-analytics:US:${job.jobId}`).sort());
-    expect(new Set(events.map((event) => event.external_id)).size).toBe(2);
-    expect(first.more).toBe(true);
-    expect(second.more).toBe(false);
-    expect(first.gap).toBeUndefined();
-    expect(second.gap).toBeUndefined();
+    expect(new Set(events.map((event) => event.external_id)).size).toBe(JOBS.length);
+    expect(pages).toHaveLength(JOBS.length);
+    expect(pages.at(-1)?.more).toBe(false);
+  });
+
+  test("since plus limit 1 pages to the end with every matching event exactly once", async () => {
+    const h = harness();
+    const { events } = await pageSinceUntilDone(h, "2026-11-20T08:00:00Z");
+    expect(events.map((event) => event.external_id).sort()).toEqual(JOBS.map((job) => `alpha-analytics:US:${job.jobId}`).sort());
+    expect(new Set(events.map((event) => event.external_id)).size).toBe(events.length);
   });
 
   test("another account's cursor is refused, never restarted", async () => {
