@@ -17,9 +17,11 @@ The handlers never touch a tool, an RPC registration or a permission rule: `regi
 access rules. A handler receives its input, the resolved `account`, the session and its signal, `call.bus`, and the
 plan when the call commits one.
 
-The contract's `register` does not register skills. `src/skills.ts` reads each `skills/<id>/SKILL.md` at setup, checks
-that its frontmatter `name` equals the directory, that it has a description and non-empty content, and registers it
-through `ctx.skill.transform`; the registration is disposed with the plugin. A skill that cannot be read refuses setup
+The contract's `register` does not register skills. `src/skills.ts` reads each `skills/<id>/SKILL.md` at setup and
+parses its frontmatter as YAML, so a folded or literal block (`>`, `|` and their chomping variants) registers the
+written text, never the marker. It checks that the frontmatter `name` equals the directory, that the description is
+non-empty and that the body is non-empty, and registers the skill through `ctx.skill.transform`; the registration is
+disposed with the plugin. A skill that cannot be read refuses setup
 with a clear error rather than loading a partial set. `test/host/skills.test.ts` proves it on the real OpenCode 2.4.1
 host: it loads the built bundle, prompts once to activate it, and reads the host's own skill list.
 
@@ -70,8 +72,9 @@ A planner returns the preview and the statement, and the contract's `register` m
 
 ## Known limits (live checks)
 
-These behaviours are implemented conservatively and their exact provider answers are confirmed against a real Google
-Cloud project; none of them lets a call run more openly than the guarded path above.
+These behaviours are implemented conservatively. Their exact provider answers have not yet been confirmed against a
+real Google Cloud project (none is available to this repository), and each is implemented so a wrong answer cannot let
+a call run more openly than the guarded path above.
 
 - **Cloud session limits (L1).** The exact `invalid_grant` subtype and description Google uses under a Cloud session
   limit, and the number of hours it states, are unconfirmed. Any reauthentication subtype is treated as a sign-in need,

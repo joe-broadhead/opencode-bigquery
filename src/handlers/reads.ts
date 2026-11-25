@@ -15,7 +15,7 @@ import { column, path } from "../domain/identifiers.js";
 import { cacheOf } from "../guards/cache.js";
 import type { FenceObject } from "../guards/fence.js";
 import { assertFenced, isFenced } from "../guards/fence.js";
-import { failureFor, googleErrorText } from "../guards/jobfail.js";
+import { failureFor } from "../guards/jobfail.js";
 import { createLexer } from "../guards/lexer.js";
 import { type PolicyVerdict, policyVerdict } from "../guards/policy.js";
 import { jobVerdict, type PreparedRead, prepareRead, type ReadContext, type ReadRun, readContext, runRead, saveNext } from "../guards/read.js";
@@ -502,7 +502,7 @@ export async function job(input: JobInput, context: HandlerContext): Promise<Rec
   };
 
   const failure = failureFor(status);
-  if (failure) throw new BigQueryError(failure.code, `${failure.detail}${googleErrorText(status.error) ? ` (${googleErrorText(status.error)!.message ?? ""})` : ""}`, failure.next);
+  if (failure) throw failure;
   const maxRows = input.maxRows ?? context.options.maxRows;
   const wait = input.wait ?? 0;
 

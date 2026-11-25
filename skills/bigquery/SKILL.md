@@ -1,6 +1,6 @@
 ---
 name: bigquery
-description: BigQuery from OpenCode: find datasets and tables, estimate a query before running it, run capped reads, save results, and plan then commit a change.
+description: BigQuery from OpenCode — find datasets and tables, estimate a query before running it, run capped reads, save results, and plan then commit a change.
 ---
 If the `bigquery` tools are absent, sign in first: run `/connect` and choose the BigQuery account.
 

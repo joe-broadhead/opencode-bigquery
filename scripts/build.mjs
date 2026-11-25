@@ -27,6 +27,8 @@ async function bundle() {
     target: "es2022",
     external: HOST_PROVIDED,
     define: { __PLUGIN_VERSION__: JSON.stringify(VERSION) },
+    // The YAML parser is CommonJS and reads `process` with require(); the bundle is ESM, so give it a real require.
+    banner: { js: 'import { createRequire as __bigqueryCreateRequire } from "node:module"; const require = __bigqueryCreateRequire(import.meta.url);' },
     legalComments: "inline",
     metafile: true,
     logLevel: "warning",

@@ -65,8 +65,9 @@ const MAPPED: Readonly<Record<ErrorCode, ContractCode>> = {
 /** The contract refusal for a plugin error. */
 export function refusalFor(error: BigQueryError): RegisterError {
   const code = MAPPED[error.code];
-  const what = error.extras.googleError?.message !== undefined ? `${error.detail} (Google: ${error.extras.googleError.message.slice(0, 120)})` : error.detail;
-  return new RegisterError(refusal(code, what, error.next));
+  // The refusal is the plugin's own words: Google's message stays on the error for a log and never enters the contract's
+  // CODE/what/next line.
+  return new RegisterError(refusal(code, error.detail, error.next));
 }
 
 /**

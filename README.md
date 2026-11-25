@@ -13,10 +13,11 @@ plan the person previews.
 
 ## Install
 
-No release exists yet: the first one, `v0.0.0`, is cut after this branch merges. Install it then with
+The current release is `v0.0.0` (tag and GitHub Release at `58c9481`); this branch prepares the `v0.0.1` follow-up.
+Once `v0.0.1` is cut, install it with
 
 ```sh
-opencode plugin add github:we-the-rebel-alliance/bigquery-plugin#v0.0.0
+opencode plugin add github:we-the-rebel-alliance/bigquery-plugin#v0.0.1
 ```
 
 The plugin needs OpenCode `>=2.4.1 <2.5.0` and has no runtime dependencies: `dist/index.js` is one self-contained bundle.
@@ -32,7 +33,7 @@ The plugin needs OpenCode `>=2.4.1 <2.5.0` and has no runtime dependencies: `dis
 {
   "plugins": [
     {
-      "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.0",
+      "package": "github:we-the-rebel-alliance/bigquery-plugin#v0.0.1",
       "options": { "accounts": { "work": { "billingProject": "my-project-1234" } } }
     }
   ]
@@ -47,8 +48,9 @@ Each alias in `options.accounts` is its own integration, `<name>` for `default` 
 { "accounts": { "work": { "billingProject": "work-project" }, "personal": { "billingProject": "home-project" } } }
 ```
 
-Run `/connect` once per alias. Every method that reads or changes BigQuery takes `account`; with one account it may be
-left out, with several a missing one is `ACCOUNT_REQUIRED` and its next step lists the aliases. A `token` account reads
+Run `/connect` once per alias. Every method that reads or changes BigQuery directly takes `account`; with one account
+it may be left out, with several a missing one is `ACCOUNT_REQUIRED` and its next step lists the aliases. A commit
+takes only `{ planId }` and runs as the account that made its plan. A `token` account reads
 a short-lived access token from an environment variable instead (`"mode": "token", "tokenEnv": "GOOGLE_ACCESS_TOKEN"`).
 
 The sign-in's level is Read or Read and write. Read runs every read and refuses every commit before Google is called;
