@@ -1,8 +1,0 @@
-{
-  "request": { "method": "GET", "path": "/bigquery/v2/projects/invented-project/datasets/invented_dataset/tables/invented_proxy_table" },
-  "response": {
-    "status": 503,
-    "headers": { "content-type": "text/html" },
-    "body": "<html><head><title>503 Service Unavailable</title></head><body>Service Unavailable</body></html>"
-  }
-}

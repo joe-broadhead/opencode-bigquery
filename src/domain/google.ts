@@ -1,21 +1,11 @@
 /**
- * The parts of BigQuery's REST API v2 the plugin reads, as types, and Google's fixed addresses. Only fields the design
- * uses are listed; every one is in Google's reference (design §17: the Job, Table and Routine resources, jobs.insert,
- * jobs.query, jobs.getQueryResults, tabledata.list, rowAccessPolicies.list, tables.testIamPermissions). Values Google
- * sends as int64 arrive as strings and stay strings here; the runtime converts them.
+ * The parts of BigQuery's REST API v2 the plugin reads, as types. Only fields the design uses are listed; every one is
+ * in Google's reference (design §17: the Job, Table and Routine resources, jobs.insert, jobs.query,
+ * jobs.getQueryResults, tabledata.list, rowAccessPolicies.list, tables.testIamPermissions). Values Google sends as
+ * int64 arrive as strings and stay strings here; the runtime converts them.
+ *
+ * The addresses themselves are in src/provider/endpoints.ts: the provider's URL is named once.
  */
-
-export const GOOGLE = {
-  /** BigQuery's REST base. */
-  api: "https://bigquery.googleapis.com/bigquery/v2",
-  /** Google's OAuth token endpoint: code exchange and refresh, with DPoP proofs. */
-  token: "https://oauth2.googleapis.com/token",
-  /** Google's authorization endpoint. */
-  authorize: "https://accounts.google.com/o/oauth2/v2/auth",
-} as const
-
-/** The hosts the plugin may send a request to. Anything else is a bug; the host tests block it. */
-export const GOOGLE_HOSTS: readonly string[] = ["bigquery.googleapis.com", "oauth2.googleapis.com"]
 
 export interface TableReference {
   readonly projectId: string

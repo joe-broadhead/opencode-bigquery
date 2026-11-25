@@ -7,7 +7,7 @@
  *
  * This module imports only types, so scripts can load it directly.
  */
-import type { Category } from "./actions.js"
+import type { Category } from "../constants.js"
 
 /** What a statement is, before any lexer finding: a read for the read path, or a plan's category. */
 export type Kind = "read" | Exclude<Category, "uncapped-read">
@@ -17,7 +17,7 @@ export const STATEMENT_KINDS = {
   // Reads: the read path, or an uncapped-read plan when the cap cannot bound them.
   SELECT: "read",
   ASSERT: "read",
-  // write → bigquery_write. A CREATE_* whose target exists is a replace, which the lexer and the plan raise to delete.
+  // write → write. A CREATE_* whose target exists is a replace, which the lexer and the plan raise to delete.
   INSERT: "write",
   UPDATE: "write",
   MERGE: "write",
@@ -45,11 +45,11 @@ export const STATEMENT_KINDS = {
   ALTER_VECTOR_INDEX: "write",
   UNDROP_SCHEMA: "write",
   LOAD_DATA: "write",
-  // export → bigquery_export.
+  // export → export.
   EXPORT_DATA: "export",
   EXPORT_MODEL: "export",
   EXPORT_METADATA: "export",
-  // share → bigquery_share.
+  // share → share.
   GRANT_ON_SCHEMA: "share",
   GRANT_ON_TABLE: "share",
   GRANT_ON_VIEW: "share",
@@ -63,7 +63,7 @@ export const STATEMENT_KINDS = {
   CREATE_DATA_POLICY: "share",
   ALTER_DATA_POLICY: "share",
   DROP_DATA_POLICY: "share",
-  // delete → bigquery_delete.
+  // delete → delete.
   DELETE: "delete",
   TRUNCATE_TABLE: "delete",
   DROP_TABLE: "delete",
@@ -84,7 +84,7 @@ export const STATEMENT_KINDS = {
   BEGIN_TRANSACTION: "delete",
   COMMIT_TRANSACTION: "delete",
   ROLLBACK_TRANSACTION: "delete",
-  // admin → bigquery_admin: capacity, reservations, assignments, connections, project and organisation settings.
+  // admin → admin: capacity, reservations, assignments, connections, project and organisation settings.
   CREATE_CAPACITY: "admin",
   CREATE_RESERVATION: "admin",
   CREATE_ASSIGNMENT: "admin",

@@ -7,7 +7,6 @@
  * - `AuthPort` (package A): an access token for an account, and its level, which is `write` only when both checks of
  *   design §3.1 pass (`decideLevel` in src/domain/levels.ts).
  * - `LedgerPort` (package C): the spend ledger, counted from what Google actually billed.
- * - `PlanStorePort` (Day 0, src/domain/plans.ts): single-use plans.
  * - `Clock`: time and ids, so tests are deterministic.
  *
  * Every call takes the call's `signal`; a stopped call aborts its request.
@@ -26,9 +25,6 @@ import type {
   TableReference,
 } from "./domain/google.js"
 import type { LevelDecision, Mode } from "./domain/levels.js"
-import type { PlanStorePort } from "./domain/plans.js"
-
-export type { PlanStorePort } from "./domain/plans.js"
 
 // ── BigQuery ─────────────────────────────────────────────────────────────
 
@@ -182,7 +178,7 @@ export interface SpendEntry {
   readonly location: string
   readonly jobId: string
   readonly bytesBilled: number
-  /** The tool or source that ran it: `bigquery_query`, `saved_read` and so on. */
+  /** The tool or source that ran it: `query`, `saved_read` and so on. */
   readonly via: string
   /** A hash of the session id, never the id itself. */
   readonly session: string
@@ -208,13 +204,7 @@ export interface Ports {
   readonly bigquery: BigQueryPort
   readonly auth: AuthPort
   readonly ledger: LedgerPort
-  readonly plans: PlanStorePort
   readonly clock: Clock
-  /**
-   * Resolves false when this install is not a tagged release: a tool that would call Google refuses before its handler.
-   * Absent on a test's own ports, so those tests keep using the handlers. Production reads it from the host's report.
-   */
-  readonly released?: () => Promise<boolean>
 }
 
 /** The dry run's numbers as the guards read them. */

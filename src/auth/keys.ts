@@ -37,7 +37,7 @@ export const keysDirOf = (stateDir: string) => join(stateDir, "keys")
 
 const KEY_VERSION = 1
 const PART = /^[A-Za-z0-9_-]{43}$/
-const ALIAS = /^[a-z][a-z0-9-]*$/
+const ALIAS = /^[a-z][a-z0-9]{0,31}$/
 
 /** A new P-256 key. Its `keyId` is RFC 7638's thumbprint: the SHA-256 of the canonical public JWK. */
 export function generateKey(): DpopKey {

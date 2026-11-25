@@ -1,47 +1,63 @@
 # Architecture
 
-How the plugin is built, for contributors. It follows opencode-gws: one namespace, the plugin's own tools over the
-vendor's REST API, plan then commit for every change. The design is the source of every rule here; the packages that
-build each part, and the files each owns, are in [File ownership](ownership.md).
+## Layers
 
-## The contract
+```
+setup (src/index.ts)
+  assertHost                     refuse an untested OpenCode release
+  loadOptions                    the options, parsed with defaults
+  attachAuthHost                 the credential store both the port and the sign-in share
+  registerPluginAccounts         one integration per alias, through the contract's accounts module
+  createProvider                 the BigQuery client, the ledger and the clock
+  createHandlers                 the one handler table
+  register                       tools, Code Mode, RPC, access rules and the bus, from that table
+```
 
-| Module | What it fixes |
-| --- | --- |
-| `src/domain/actions.ts` | The one action table: 19 tools and 2 method-only reads, each with its action `bigquery.<name>`, read-only flag, class, operation and owner; the run-time ask `bigquery.uncapped_read`; which tool commits which plan category. The default rules, the package declaration, the registry and the tools RPC all come from it. |
-| `src/domain/contract.ts` | Every tool's input and output schema, and the result envelope: `state`, `error`, `message`, `next`, `reason`, `googleError` (Google's text, untrusted), `warnings`. |
-| `src/domain/errors.ts` | The one error table, with each code's state and owning package, the warnings, and the source contract's code for each. |
-| `src/domain/statements.ts` | Every `statementType` in Google's enum (`test/fixtures/statement-types.json`, read by `scripts/statement-types.mjs`) mapped to a kind; `raise` never lowers a decision. |
-| `src/domain/levels.ts` | The sign-in record, the scopes of each level, the authorization parameters (`prompt=consent`, never `include_granted_scopes`), and `decideLevel`: `write` only on both checks of design §3.1. The revocation endpoints the plugin never calls. The disclosure. |
-| `src/domain/plans.ts` | The single-use plan store, bound to session, agent, account and category, and the plan's allowlisted prompt metadata. |
-| `src/domain/lexer-api.ts` | The lexer's token types and findings; package C builds the lexer to it. |
-| `src/domain/google.ts`, `accounts.ts`, `identifiers.ts` | Google's addresses and resource types; account resolution and assert resources; validated identifiers for messages. |
-| `src/domain/probe.ts` | The row-policy probe's text: plain `SELECT *` with no tagged column, never `SELECT * EXCEPT ()`, and a partition filter that keeps every partition. |
-| `src/ports.ts` | The ports: BigQuery (dry run and run through `jobs.insert`), auth (`token`, `level`), the spend ledger, the plan store and the clock. `test/fake/ports.ts` fakes each. |
-| `src/options.ts` | Every option of design §12, strict. |
+The handlers never touch a tool, an RPC registration or a permission rule: `register` owns doors 1–3 and the generated
+access rules. A handler receives its input, the resolved `account`, the session and its signal, `call.bus`, and the
+plan when the call commits one.
 
-## The plugin
+## The provider client
 
-| Module | What it does |
-| --- | --- |
-| `src/index.ts`, `src/plugin.ts` | The server part: `Plugin.define` with the id `google-cloud.bigquery`, set up in opencode-github's order. |
-| `src/registry.ts` | One spec per action-table entry, with its schemas and its package's handler (`src/handlers/*`), or `NOT_BUILT`. It resolves the account, asserts a read's own action before its handler, hands the handler ports that refuse any request before that assert, refuses an undeclared assert, refuses an uncapped-read plan from a script, and turns a refusal into the envelope. |
-| `src/wiring.ts` | The ports the plugin runs with, and their state folder. |
-| `src/permissions.ts` | The default rules from the action table, inserted after each agent's base allow. |
-| `src/tool-spec.ts`, `src/tools.ts` | A spec as the model's tool and as a tools RPC method; the namespace and the tools' registration. |
-| `src/host/script-methods.ts` | The tools RPC's plugin value and its methods (the reads), for the source contract's `tools-rpc`. |
-| `src/rpc.ts`, `src/status.ts`, `src/tui/index.tsx` | The status contract, `/bigquery-status`, the status RPC and the `/bigquery` dialog. |
-| `src/constants.ts`, `src/skills.ts`, `src/redact.ts`, `src/host-version.ts`, `src/version.ts` | Ids and the host range; skills, redaction, the host check and the version. |
+`src/provider/` is the only layer that talks to Google. `endpoints.ts` names every URL once; `http.ts` sends JSON over
+`fetch` with a bearer token from the auth port, at most eight requests in flight, jittered retries for idempotent calls
+and runs that carry a client job id, and Google's failures mapped to the plugin's codes. `bigquery.ts` is the REST v2
+surface: `jobs.insert` for dry runs and runs, `jobs.getQueryResults` for rows, `jobs.get`/`jobs.list`, `jobs.cancel`,
+`projects.list`, `datasets.list`, `tables.list`/`tables.get`, `tabledata.list`, `routines.list`/`routines.get`,
+`rowAccessPolicies.list` and `tables.testIamPermissions`. The request body is built from the port's own fields, so the
+read path cannot be turned into something else by passing extra keys: no destination table, write disposition, session
+or connection property is ever sent.
 
-## Setup order
+## The read path
 
-Options, the host check, then each registration, kept for cleanup in reverse: the default rules; the namespace and the
-nineteen tools; status; the tools RPC (the fourteen reads); the skills. Every transform is synchronous and never
-throws: a failure is kept, and status shows it with its next step.
+Every billed read goes through `guards/read.ts`:
 
-## The bundle
+1. the lexer refuses what it cannot read and raises the statement's kind (legacy SQL, `CALL`, transactions, external
+   effects, temporary functions);
+2. a free dry run answers the statement type, the referenced objects and an estimate that is never a cache hit;
+3. the references are expanded: each view's and SQL routine's body is dry-run too, so the fence and the policy rule see
+   what the statement actually reads;
+4. the account's dataset fence, the policy-tag rule and the byte cap are checked; a condition the cap cannot bound is
+   refused with a next step naming `plan_query`;
+5. the run carries the exact text, a client job id (`oc_<uuid>`), `maximumBytesBilled`, labels and a time limit;
+6. the answer is compared with its dry run (`CLASSIFICATION_DRIFT`), rows are shaped to the inline budget, and what
+   Google billed is written to the ledger.
 
-`dist/index.js` carries zod, the source contract's tools RPC and `google-auth-library`, which only the opt-in `adc`
-mode loads, on first use (`src/auth/adc-library.ts`). The package keeps no runtime dependency. The library is
-CommonJS, so the bundle opens with a `require` from `node:module`'s `createRequire`; `node-fetch` is replaced by the
-runtime's own `fetch` and `debug`'s optional `supports-color` by a stub (`scripts/shims`).
+## What is cached
+
+Only metadata, in memory, for 60 seconds: table facts and routine bodies used by expansion and the policy rule, and
+row-access-policy verdicts for 10 minutes. Tokens live in memory for their lifetime. No row, no query result and no
+provider answer is cached by the plugin: a `reader` app keeps its own cache and cursors.
+
+## OpenCode APIs used
+
+`@opencode/plugin` 2.4.1 only: `ctx.app.version`, `ctx.options`, `ctx.integration` (the credential store),
+`ctx.agent.list()` through the contract's status call, and what `register` uses (tools, RPC, permission, session). No
+private host package is imported.
+
+## Plans
+
+A planner returns the preview and the statement, and the contract's `register` mints the plan id, keeps the answer for
+15 minutes and spends it once. The commit receives that answer as `call.plan`, re-runs the dry run and refuses
+`PLAN_CHANGED` when the statement type, its targets, its location, whether the cap bounds it, or an estimate more than
+10 % higher differ. Nothing is written to disk for a plan.

@@ -1,6 +1,5 @@
 /**
- * The read path (design §5.1) for `bigquery_query`, `bigquery_profile`, `bigquery_search`, `bigquery_table`'s
- * partitions and `bigquery_saved_read` (package E calls the same two functions).
+ * The read path (design §5.1) for `query`, `profile`, `search`, `table`'s partitions and `saved_read`.
  *
  * `prepareRead` does steps 1–8 and throws the refusal the read deserves; `runRead` does step 9 and the post-run checks.
  * Every step fails closed: a statement BigQuery does not call a read refuses, a reference that cannot be resolved, an
@@ -31,35 +30,32 @@
  * (`CLASSIFICATION_DRIFT`).
  */
 import { BigQueryError, type ErrorCode } from "../domain/errors.js"
-import { actionOf } from "../domain/actions.js"
-import { tableResource } from "../domain/accounts.js"
-import type { Accuracy, DatasetReference, DryRunStatistics, QueryParameter, TableInfo, RoutineInfo } from "../domain/google.js"
+import type { Accuracy, DatasetReference, DryRunStatistics, QueryParameter, RoutineInfo, TableInfo } from "../domain/google.js"
 import { path } from "../domain/identifiers.js"
 import type { Findings, Token } from "../domain/lexer-api.js"
-import { kindOf, raise, type Kind, type StatementType } from "../domain/statements.js"
+import { type Kind, kindOf, raise, type StatementType } from "../domain/statements.js"
 import type { Options } from "../options.js"
 import type { JobStatus, Ports, ResultPage } from "../ports.js"
 import { cacheOf } from "./cache.js"
 import { asCallError } from "./callerrors.js"
-import { capVerdict, type CapVerdict } from "./cap.js"
+import { type CapVerdict, capVerdict } from "./cap.js"
 import { capAndBudget, usdFor, type Warning } from "./cost.js"
-import { Expander, MAX_DEPTH, MAX_EXPANDED, type ExpansionResult } from "./expansion.js"
-import { rowGate } from "./rows.js"
-import { assertFenced, isFenced, type FenceObject } from "./fence.js"
+import { Expander, type ExpansionResult, MAX_DEPTH, MAX_EXPANDED } from "./expansion.js"
+import { assertFenced, type FenceObject, isFenced } from "./fence.js"
 import { hintsFor } from "./hints.js"
 import { failureFor } from "./jobfail.js"
 import { createLexer, definesFunction, hasKeyword, informationSchemaRefs } from "./lexer.js"
 import { limiterFor } from "./limits.js"
 import { toQueryParameters } from "./params.js"
-import { policyVerdict, type PolicyVerdict } from "./policy.js"
-import { shapeRows, type ResultColumn, type ShapedRows } from "./results.js"
+import { type PolicyVerdict, policyVerdict } from "./policy.js"
+import { type ResultColumn, type ShapedRows, shapeRows } from "./results.js"
 import { RowPolicyProber, type RowVerdict } from "./rowpolicy.js"
+import { rowGate } from "./rows.js"
 import { sessionHash } from "./session.js"
-import { locationOf, projectOf, settingsOf, type AccountSettings } from "./settings.js"
+import { type AccountSettings, locationOf, projectOf, settingsOf } from "./settings.js"
 import type { TableFacts } from "./tables.js"
-import type { Call } from "../tool-spec.js"
 
-/** What a read needs besides its own input: the ports, the account, the call and the tool it is running for. */
+/** What a read needs besides its own input: the ports, the account the register resolved, and the call's session. */
 export interface ReadContext {
   readonly ports: Ports
   readonly options: Options
@@ -67,32 +63,19 @@ export interface ReadContext {
   readonly settings: AccountSettings
   readonly sessionID: string
   readonly signal: AbortSignal
-  /** The tool, for the `oc_tool` label: `bigquery_query`, `bigquery_profile`, `saved_read`. */
+  /** The method, for the `oc_tool` job label: `query`, `profile`, `saved_read`. */
   readonly via: string
-  /** The tool's action, which the per-table assert names (design §5.4). */
-  readonly action: string
-  /** The call, for the per-table assert: `<account>:table:<project>.<dataset>.<name>` for every referenced object. */
-  readonly call: Call
 }
 
-export function readContext(input: {
-  readonly ports: Ports
-  readonly options: Options
-  readonly account: string
-  readonly call: Call
-  readonly via: string
-}): ReadContext {
-  const tool = input.via.startsWith("bigquery_") ? input.via.slice("bigquery_".length) : input.via
+export function readContext(input: { readonly ports: Ports; readonly options: Options; readonly account: string; readonly sessionID: string; readonly signal: AbortSignal; readonly via: string }): ReadContext {
   return {
     ports: input.ports,
     options: input.options,
     account: input.account,
     settings: settingsOf(input.options, input.account),
-    sessionID: input.call.sessionID,
-    signal: input.call.signal,
+    sessionID: input.sessionID,
+    signal: input.signal,
     via: input.via,
-    action: actionOf(tool).action,
-    call: input.call,
   }
 }
 
@@ -142,7 +125,7 @@ export type PrepareMode = "read" | "inspect"
 export const TEMPORARY_FUNCTION = "a temporary function"
 
 const lexRefusal = (line: number, column: number, what: string) =>
-  new BigQueryError("SQL_INVALID", `The lexer found ${what} at line ${line}, column ${column}`, "Fix the SQL at that position; bigquery_table shows the names.")
+  new BigQueryError("SQL_INVALID", `The lexer found ${what} at line ${line}, column ${column}`, "Fix the SQL at that position; table shows the names.")
 
 /** Steps 1–8 of §5.1. Throws the refusal; never returns a statement that has not passed every guard. */
 export async function prepareRead(context: ReadContext, request: ReadRequest, mode: PrepareMode): Promise<PreparedRead> {
@@ -200,7 +183,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
     throw new BigQueryError(
       "STATEMENT_NOT_READ",
       `BigQuery parsed the SQL as ${plain(statistics.statementType)}, and this tool runs only SELECT and ASSERT`,
-      "Call bigquery_plan({ sql }) and show the user the preview, then call the commit tool it names.",
+      "Plan it with the planner for its class (plan_write, plan_export, plan_share, plan_delete or plan_admin), show the person the preview, then commit with the method it names.",
     )
   }
 
@@ -231,7 +214,6 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
   // work:table:*.hr.*` is consulted too.
   const objects = fenceObjects(statistics, expansion)
   assertFenced(context.settings.fence, objects)
-  await assertObjectResourcesFor(context, objects)
 
   const findings: Findings[] = [top, ...expansion.findings]
   const effects = [...new Set([...top.externalEffects, ...expansion.findings.flatMap((report) => report.externalEffects), ...expansion.effects])]
@@ -245,7 +227,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
       throw new BigQueryError(
         "NEEDS_PLAN",
         "The query defines a temporary function, and what a temporary function's body reads cannot be checked before it runs",
-        "Write the expression inline, or call a persistent function (its body is checked); otherwise show the user the preview after bigquery_plan({ sql }), which needs a Read and write sign-in.",
+        "Write the expression inline, or call a persistent function (its body is checked); otherwise show the user the preview after plan_query({ sql }), which needs a Read and write sign-in.",
         { reason: "UNRESOLVED_REFERENCE" },
       )
     }
@@ -253,7 +235,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
       throw new BigQueryError(
         "NEEDS_PLAN",
         `The query's references were not all checked: ${expansion.limit} (at most ${MAX_EXPANDED} views and routines, ${MAX_DEPTH} deep, are expanded for one read)`,
-        "Show the user the preview after bigquery_plan({ sql }), which needs a Read and write sign-in, or split the query so each part reads fewer objects.",
+        "Show the user the preview after plan_query({ sql }), which needs a Read and write sign-in, or split the query so each part reads fewer objects.",
         { reason: "UNRESOLVED_REFERENCE" },
       )
     }
@@ -261,7 +243,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
       throw new BigQueryError(
         "NEEDS_PLAN",
         `The query references ${safeName(expansion.unresolved[0]!)}, which could not be resolved (a view or routine deeper than 3, a body BigQuery's dry run could not analyse, or a property graph)`,
-        "Show the user the preview after bigquery_plan({ sql }); a Read account needs a Read and write sign-in for this one, or rewrite the query to avoid that object.",
+        "Show the user the preview after plan_query({ sql }); a Read account needs a Read and write sign-in for this one, or rewrite the query to avoid that object.",
         { reason: "UNRESOLVED_REFERENCE" },
       )
     }
@@ -269,7 +251,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
       throw new BigQueryError(
         "NEEDS_PLAN",
         `The query has external effects: ${effects.join(", ")}`,
-        "Show the user the preview after bigquery_plan({ sql }); these bill or act outside the byte cap and need a Read and write account.",
+        "Show the user the preview after plan_query({ sql }); these bill or act outside the byte cap and need a Read and write account.",
         { reason: "EXTERNAL_EFFECTS" },
       )
     }
@@ -292,7 +274,7 @@ export async function prepareRead(context: ReadContext, request: ReadRequest, mo
     throw new BigQueryError(
       "NEEDS_PLAN",
       `The byte cap cannot bound this query: ${cap.whyNot ?? "an unknown condition"}`,
-      "Call bigquery_plan({ sql }), show the user the preview, and with their go-ahead run bigquery_query({ planId }).",
+      "Plan it with plan_query({ sql }), show the person the preview, and with their go-ahead run run_query({ planId }).",
       { reason: "CAP_NOT_ENFORCEABLE" },
     )
   }
@@ -412,7 +394,7 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
     throw asCallError(error, "The query job did not start")
   }
 
-  // A job this process started is remembered by id, so `bigquery_job` can reuse the text-aware verdict instead of
+  // A job this process started is remembered by id, so `job` can reuse the text-aware verdict instead of
   // failing closed on every tagged table (review H-1).
   rememberJob(context.ports.clock, context.account, status.ref.jobId, prepared)
 
@@ -475,7 +457,7 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
       failure: {
         code: "CLASSIFICATION_DRIFT",
         detail: drift,
-        next: "bigquery_jobs shows what ran; report it, and run the query again after the object settles.",
+        next: "jobs shows what ran; report it, and run the query again after the object settles.",
       },
     }
   }
@@ -509,11 +491,11 @@ export async function runRead(context: ReadContext, prepared: PreparedRead, inpu
 }
 
 /**
- * The `next` a save-only result answers with: `bigquery_save` on the job, whose result table is the only copy of the
+ * The `next` a save-only result answers with: `save` on the job, whose result table is the only copy of the
  * rows. The job and location are validated identifiers; the path is the caller's to choose.
  */
 export function saveNext(job: { readonly project: string; readonly jobId: string; readonly location: string }): string {
-  return `bigquery_save({ project: ${plain(job.project)}, jobId: ${plain(job.jobId)}, location: ${plain(job.location)}, path: "results.jsonl", format: "jsonl" })`
+  return `save({ project: ${plain(job.project)}, jobId: ${plain(job.jobId)}, location: ${plain(job.location)}, path: "results.jsonl", format: "jsonl" })`
 }
 
 /**
@@ -544,7 +526,7 @@ function dropExpansionCaches(ports: Ports): void {
   cacheOf<RoutineInfo>(ports.clock, "expand.routines", 60_000, Date.now).clear()
 }
 
-// ── the jobs this process started, for `bigquery_job`'s reuse of a text-aware verdict ────────────────────────────
+// ── the jobs this process started, for `job`'s reuse of a text-aware verdict ────────────────────────────
 
 const jobVerdicts = new WeakMap<object, Map<string, PreparedRead>>()
 const MAX_JOBS = 64
@@ -568,27 +550,6 @@ export function jobVerdict(owner: object, account: string, jobId: string): Prepa
 }
 
 /**
- * §5.4's second fence: the tool's own action asserted again with every referenced object as a resource
- * (`<account>:table:<project>.<dataset>.<name>`), so a person's OpenCode rule fences too (review M-2).
- */
-export async function assertObjectResources(
-  input: { readonly call: Call; readonly account: string; readonly action: string; readonly via: string; readonly objects: readonly FenceObject[] },
-): Promise<void> {
-  if (input.objects.length === 0) return
-  const resources = [...new Set(input.objects.map((object) => tableResource(input.account, object.project, object.dataset, object.name)))]
-  await input.call.assert({
-    action: input.action,
-    resources,
-    metadata: { account: input.account, tool: input.via, objects: input.objects.length },
-  })
-}
-
-/** The per-table assert through a read context. */
-async function assertObjectResourcesFor(context: ReadContext, objects: readonly FenceObject[]): Promise<void> {
-  await assertObjectResources({ call: context.call, account: context.account, action: context.action, via: context.via, objects })
-}
-
-/**
  * An allow fence cannot confine a region- or project-level `INFORMATION_SCHEMA` view: it names every dataset in the
  * region or project, and Google's dry run need not list any fenced object for it (review LOW 1). A dataset-qualified
  * one is allowed only when its dataset is inside the fence. Deny-only fences are unchanged.
@@ -603,7 +564,7 @@ function assertWideInformationSchema(fence: AccountSettings["fence"], tokens: re
     throw new BigQueryError(
       "DATASET_FENCED",
       "The query reads a region- or project-level INFORMATION_SCHEMA view, which an allow fence cannot confine",
-      "Use bigquery_search, which filters its matches through the fence, or ask the user to change the account's datasets option.",
+      "Use search, which filters its matches through the fence, or ask the user to change the account's datasets option.",
     )
   }
 }

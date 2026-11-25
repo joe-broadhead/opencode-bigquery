@@ -2,5 +2,7 @@ node_modules/
 dist/
 *.tgz
 .DS_Store
-.source-*/
-/reports/
+bigquery-plugin-*.tgz
+reports/
+coverage/
+.bigquery/

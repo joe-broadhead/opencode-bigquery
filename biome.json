@@ -1,0 +1,13 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.3.6/schema.json",
+  "files": { "includes": ["src/**", "test/**", "scripts/**"] },
+  "formatter": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": false,
+      "correctness": { "noUnreachable": "error", "noConstAssign": "error", "noInvalidUseBeforeDeclaration": "error" },
+      "suspicious": { "noDuplicateCase": "error", "noDoubleEquals": "error", "noExplicitAny": "off" }
+    }
+  }
+}

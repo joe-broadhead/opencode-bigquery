@@ -39,30 +39,6 @@ export const ErrorCode = {
     state: "setup",
     owner: "day0",
   },
-  SKILLS_INVALID: {
-    meaning: "A skill file that ships with the plugin is missing or unreadable.",
-    next: "Reinstall the plugin.",
-    state: "setup",
-    owner: "day0",
-  },
-  RULES_NOT_ADDED: {
-    meaning: "The default permission rules could not be added to the agents, so BigQuery tools may run without asking.",
-    next: "Restart OpenCode.",
-    state: "setup",
-    owner: "day0",
-  },
-  STATUS_UNAVAILABLE: {
-    meaning: "The status could not be computed.",
-    next: "Try again in a few seconds; if it persists, restart OpenCode.",
-    state: "setup",
-    owner: "day0",
-  },
-  TOOLS_NOT_REGISTERED: {
-    meaning: "The plugin's tools could not be registered with OpenCode.",
-    next: "Restart OpenCode.",
-    state: "setup",
-    owner: "day0",
-  },
 
   // ── Requests ──────────────────────────────────────────────────────────
   INPUT_INVALID: {
@@ -71,33 +47,21 @@ export const ErrorCode = {
     state: "refused",
     owner: "day0",
   },
-  NOT_BUILT: {
-    meaning: "This tool is declared but not built yet in this version of the plugin; nothing was sent to Google.",
-    next: "Use another tool, or update the plugin.",
-    state: "refused",
-    owner: "day0",
-  },
-  NOT_RELEASED: {
-    meaning: "This install is not a tagged release, so the tool did not call Google.",
-    next: "Install a tagged release when one exists. A source checkout does not call Google.",
-    state: "refused",
-    owner: "day0",
-  },
   ACCOUNT_REQUIRED: {
     meaning: "More than one account is configured and the call named none.",
-    next: "Pass account with one of the configured aliases; bigquery_status lists them.",
+    next: "Pass account with one of the configured aliases; status lists them.",
     state: "refused",
     owner: "day0",
   },
   ACCOUNT_UNKNOWN: {
     meaning: "The account alias is not configured.",
-    next: "Pass a configured alias; bigquery_status lists them.",
+    next: "Pass a configured alias; status lists them.",
     state: "refused",
     owner: "day0",
   },
   CANCELLED: {
     meaning: "The call was stopped; a job it started was cancelled, and what it billed is unknown.",
-    next: "Do not retry unless the user asks; bigquery_jobs shows what ran.",
+    next: "Do not retry unless the user asks; jobs shows what ran.",
     state: "cancelled",
     owner: "B",
   },
@@ -119,18 +83,6 @@ export const ErrorCode = {
   AUTH_CLIENT_REQUIRED: {
     meaning: "No OAuth client is configured, none was entered in the form, and no earlier sign-in has one.",
     next: "Enter a Desktop OAuth client in /connect, or set the oauthClient option.",
-    state: "refused",
-    owner: "A",
-  },
-  ADC_UNAVAILABLE: {
-    meaning: "Application Default Credentials found nothing on this machine.",
-    next: "Set GOOGLE_APPLICATION_CREDENTIALS, or run the gcloud command the message names with the bigquery scope.",
-    state: "refused",
-    owner: "A",
-  },
-  ADC_REFUSED: {
-    meaning: "Application Default Credentials are refused in a managed (hosted) engine unless allowAdcInHost is set.",
-    next: "Use an interactive account, or ask the host's operator to set allowAdcInHost.",
     state: "refused",
     owner: "A",
   },
@@ -157,7 +109,7 @@ export const ErrorCode = {
   // ── Google ────────────────────────────────────────────────────────────
   BILLING_PROJECT_REQUIRED: {
     meaning: "The account has no billing project, so a query cannot run.",
-    next: "Call bigquery_list({}) to see the projects, then set billingProject on the account.",
+    next: "Call list({}) to see the projects, then set billingProject on the account.",
     state: "refused",
     owner: "C",
   },
@@ -187,19 +139,13 @@ export const ErrorCode = {
   },
   NOT_FOUND: {
     meaning: "The project, dataset, table, routine or job was not found.",
-    next: "Find the exact name with bigquery_list or bigquery_search.",
+    next: "Find the exact name with list or search.",
     state: "refused",
     owner: "B",
   },
-  LOCATION_MISMATCH: {
-    meaning: "The query references objects in different locations.",
-    next: "Query one location at a time, and pass location.",
-    state: "refused",
-    owner: "C",
-  },
   SQL_INVALID: {
     meaning: "The dry run or the lexer rejected the SQL; the line and column are given, Google's text is in googleError.",
-    next: "Fix the SQL at that position; bigquery_table shows the names.",
+    next: "Fix the SQL at that position; table shows the names.",
     state: "refused",
     owner: "C",
   },
@@ -216,15 +162,15 @@ export const ErrorCode = {
     owner: "C",
   },
   STATEMENT_NOT_READ: {
-    meaning: "bigquery_query got a change or a script.",
-    next: "Call bigquery_plan({ sql }), show the preview to the user, then call the commit tool it names.",
+    meaning: "query got a change or a script.",
+    next: "Call plan({ sql }), show the preview to the user, then call the commit tool it names.",
     state: "refused",
     owner: "C",
   },
   NEEDS_PLAN: {
     meaning:
       "A read whose cost the cap cannot bound, that has external effects, or whose references could not be resolved; the reason is CAP_NOT_ENFORCEABLE, EXTERNAL_EFFECTS or UNRESOLVED_REFERENCE.",
-    next: "Call bigquery_plan({ sql }) and show the user the preview; with their go-ahead, bigquery_query({ planId }) for CAP_NOT_ENFORCEABLE, or the commit tool named for the others.",
+    next: "Call plan({ sql }) and show the user the preview; with their go-ahead, query({ planId }) for CAP_NOT_ENFORCEABLE, or the commit tool named for the others.",
     state: "refused",
     owner: "C",
   },
@@ -259,7 +205,7 @@ export const ErrorCode = {
     owner: "D",
   },
   CATEGORY_MISMATCH: {
-    meaning: "A plain read sent to bigquery_plan, or a plan committed with another category's tool.",
+    meaning: "A plain read sent to plan, or a plan committed with another category's tool.",
     next: "Call the tool the message names.",
     state: "refused",
     owner: "day0",
@@ -296,7 +242,7 @@ export const ErrorCode = {
   },
   JOB_FAILED: {
     meaning: "The job failed; Google's reason is in googleError.",
-    next: "Fix the query as googleError says; bigquery_job shows the job.",
+    next: "Fix the query as googleError says; job shows the job.",
     state: "failed",
     owner: "B",
   },
@@ -314,7 +260,7 @@ export const ErrorCode = {
   },
   CLASSIFICATION_DRIFT: {
     meaning: "What ran differed from its dry run: another statement type, or a view or routine expansion did not see. It was recorded.",
-    next: "bigquery_jobs shows what ran; report it.",
+    next: "jobs shows what ran; report it.",
     state: "failed",
     owner: "C",
   },
@@ -346,30 +292,6 @@ export const ErrorCode = {
   },
 
   // ── Plans ─────────────────────────────────────────────────────────────
-  PLAN_NOT_FOUND: {
-    meaning: "No plan has this planId: it never existed, or its time limit passed and it was removed.",
-    next: "Create a plan with bigquery_plan, then commit its planId.",
-    state: "refused",
-    owner: "day0",
-  },
-  PLAN_ALREADY_USED: {
-    meaning: "The plan was committed, or is being committed. Plans are single-use.",
-    next: "Check the earlier result with bigquery_jobs before planning the change again.",
-    state: "refused",
-    owner: "day0",
-  },
-  PLAN_EXPIRED: {
-    meaning: "The plan's time limit passed, or a failed commit expired it.",
-    next: "Plan again and show the new preview.",
-    state: "refused",
-    owner: "day0",
-  },
-  PLAN_CALLER_MISMATCH: {
-    meaning: "Another session, agent or account created the plan.",
-    next: "Plan again from the session and agent that will commit it.",
-    state: "refused",
-    owner: "day0",
-  },
   PLAN_CHANGED: {
     meaning: "The commit's dry run differs from the plan's: its type, targets, location, cap or an estimate over 10 percent higher.",
     next: "Plan again and show the new preview.",
@@ -381,6 +303,18 @@ export const ErrorCode = {
     next: "Ask the user to set admin.enabled to true.",
     state: "refused",
     owner: "D",
+  },
+  PLAN_INVALID: {
+    meaning: "The plan a commit named is missing, expired, already spent, or belongs to another method.",
+    next: "Plan the change again, then commit with the planId the planner answers.",
+    state: "refused",
+    owner: "day0",
+  },
+  PLAN_USED: {
+    meaning: "The plan a commit named was already spent.",
+    next: "Plan the change again; a plan commits once.",
+    state: "refused",
+    owner: "day0",
   },
   ADMIN_REASON_REQUIRED: {
     meaning: "An admin plan was made without reason.",
@@ -413,33 +347,6 @@ export const WARNING_CODES = Object.keys(WarningCode).sort() as readonly Warning
 export const NEEDS_PLAN_REASONS = ["CAP_NOT_ENFORCEABLE", "EXTERNAL_EFFECTS", "UNRESOLVED_REFERENCE"] as const
 export type NeedsPlanReason = (typeof NEEDS_PLAN_REASONS)[number]
 
-/**
- * The source contract's codes a source read answers with, for each plugin code a source read can raise. A code not
- * listed is `UNAVAILABLE` to a source.
- */
-export const SOURCE_CODE: Readonly<Partial<Record<ErrorCode, string>>> = {
-  AUTH_REQUIRED: "NEEDS_SIGN_IN",
-  AUTH_CLIENT_REQUIRED: "NEEDS_SIGN_IN",
-  ADC_UNAVAILABLE: "NEEDS_SIGN_IN",
-  ADC_REFUSED: "NEEDS_SIGN_IN",
-  AUTH_SCOPE_MISSING: "SCOPE_MISSING",
-  PERMISSION_DENIED: "PERMISSION_DENIED",
-  COLUMN_DENIED: "PERMISSION_DENIED",
-  DATASET_FENCED: "PERMISSION_DENIED",
-  API_DISABLED: "PERMISSION_DENIED",
-  BUDGET_REACHED: "BUDGET_EXCEEDED",
-  COST_CAP: "BUDGET_EXCEEDED",
-  BYTES_BILLED_LIMIT: "BUDGET_EXCEEDED",
-  INPUT_INVALID: "INPUT_INVALID",
-  BILLING_PROJECT_REQUIRED: "INPUT_INVALID",
-  NOT_FOUND: "INPUT_INVALID",
-  CAP_NOT_ENFORCEABLE: "INPUT_INVALID",
-  NEEDS_PLAN: "INPUT_INVALID",
-  STATEMENT_NOT_READ: "INPUT_INVALID",
-  SQL_INVALID: "INPUT_INVALID",
-  RATE_LIMITED: "RATE_LIMITED",
-  QUOTA_EXCEEDED: "RATE_LIMITED",
-}
 
 export function isErrorCode(value: string): value is ErrorCode {
   return Object.hasOwn(ErrorCode, value)

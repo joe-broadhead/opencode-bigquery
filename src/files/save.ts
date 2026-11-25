@@ -1,5 +1,5 @@
 /**
- * The file `bigquery_save` writes (design §7): CSV, JSONL or Parquet, built row by row from `getQueryResults` pages,
+ * The file `save` writes (design §7): CSV, JSONL or Parquet, built row by row from `getQueryResults` pages,
  * with the caps counted as it goes.
  *
  * - the temp file is created beside the target and renamed into place when the save completes; any failure — an
@@ -12,11 +12,11 @@
 import { createHash, randomUUID } from "node:crypto"
 import { closeSync, mkdirSync, openSync, renameSync, rmSync, writeSync } from "node:fs"
 import { dirname } from "node:path"
-import type { SchemaField } from "../domain/google.js"
 import { BigQueryError } from "../domain/errors.js"
+import type { SchemaField } from "../domain/google.js"
 import { ParquetWriter } from "./parquet.js"
-import { csvCell, jsonValue, parquetCell, parquetType } from "./values.js"
 import type { SaveFormat } from "./paths.js"
+import { csvCell, jsonValue, parquetCell, parquetType } from "./values.js"
 
 /** How many rows one `getQueryResults` page asks for (design §7). */
 export const SAVE_PAGE_ROWS = 10_000

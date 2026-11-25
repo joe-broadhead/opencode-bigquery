@@ -22,7 +22,7 @@ import type { SchemaField } from "../domain/google.js"
 import { partitionFloor, probeSelect, tablePath } from "../domain/probe.js"
 import type { Ports } from "../ports.js"
 import type { TtlCache } from "./cache.js"
-import { widestFirst, type TableFacts } from "./tables.js"
+import { type TableFacts, widestFirst } from "./tables.js"
 
 /** The row-access answer for one table. */
 export type RowVerdict =

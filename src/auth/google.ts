@@ -14,21 +14,22 @@
  * Google's error text and code are used only to classify a refusal; they never reach a `message` or `next` (design
  * §5.6). The plugin never calls `/revoke`: Google's revocation is project-wide (§3.1).
  */
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
+
 import { timingSafeEqual } from "node:crypto"
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { BigQueryError } from "../domain/errors.js"
-import { GOOGLE } from "../domain/google.js"
 import type { Level } from "../domain/levels.js"
+import { GOOGLE_AUTHORIZE, GOOGLE_TOKEN_INFO_URL, GOOGLE_TOKEN_URL } from "../provider/endpoints.js"
+import type { OAuthClient } from "./client.js"
 import { codeJti, dpopProof, randomState, refreshJti } from "./dpop.js"
 import { authorizationInstructions, signInScopes } from "./form.js"
-import { createPkce } from "./pkce.js"
-import type { OAuthClient } from "./client.js"
-import type { Redirect } from "./redirect.js"
 import { type DpopKey, generateKey } from "./keys.js"
+import { createPkce } from "./pkce.js"
+import type { Redirect } from "./redirect.js"
 
-export const TOKEN_ENDPOINT = GOOGLE.token
+export const TOKEN_ENDPOINT = GOOGLE_TOKEN_URL
 /** Google's token-info endpoint, used only to name a `token` account's email (design §10's `probe`). */
-export const TOKENINFO_ENDPOINT = "https://oauth2.googleapis.com/tokeninfo"
+export const TOKENINFO_ENDPOINT = GOOGLE_TOKEN_INFO_URL
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
 const MAX_BODY = 64 * 1024
 
@@ -445,7 +446,7 @@ export function buildAuthorizeUrl(input: {
   readonly level: Level
   readonly extraScopes?: readonly string[]
 }): string {
-  const url = new URL(GOOGLE.authorize)
+  const url = new URL(GOOGLE_AUTHORIZE)
   const params = url.searchParams
   params.set("response_type", "code")
   params.set("client_id", input.clientId)

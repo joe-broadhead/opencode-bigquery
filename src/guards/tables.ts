@@ -5,8 +5,9 @@
  * Every classification fails closed: a type or configuration this version does not recognise is `unknown`, which makes
  * the cap unenforceable and sends the query to a plan, rather than being assumed native.
  */
-import type { Partitioning } from "../domain/probe.js"
+
 import type { SchemaField, TableInfo } from "../domain/google.js"
+import type { Partitioning } from "../domain/probe.js"
 
 export type Storage = "native" | "external" | "unknown"
 
@@ -31,7 +32,7 @@ export interface TableFacts {
   readonly location?: string
 }
 
-/** The types whose values an aggregate can compare, for `bigquery_profile`. */
+/** The types whose values an aggregate can compare, for `profile`. */
 const ORDERABLE = new Set(["STRING", "BYTES", "INT64", "FLOAT64", "NUMERIC", "BIGNUMERIC", "DATE", "TIME", "DATETIME", "TIMESTAMP"])
 /** The numeric types `APPROX_QUANTILES` accepts. */
 export const NUMERIC_TYPES = new Set(["INT64", "FLOAT64", "NUMERIC", "BIGNUMERIC"])
@@ -126,7 +127,7 @@ export function tableFacts(info: TableInfo): TableFacts {
   }
 }
 
-/** One schema leaf, as `bigquery_table` shows it: the dotted path, type, mode, description and whether it is tagged. */
+/** One schema leaf, as `table` shows it: the dotted path, type, mode, description and whether it is tagged. */
 export interface FlatColumn {
   readonly path: string
   readonly type: string

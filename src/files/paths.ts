@@ -1,5 +1,5 @@
 /**
- * Where `bigquery_save` writes (design §7): a path inside the project, `resultsDir` or the `allowedRoots` option, and
+ * Where `save` writes (design §7): a path inside the project, `resultsDir` or the `allowedRoots` option, and
  * nowhere else (`SAVE_PATH_REFUSED`). Roots and the target are compared as real paths, so a link inside the project
  * cannot walk the write outside it, and an alias of a root (macOS's `/var` and `/private/var`) is still that root. An
  * existing file is `SAVE_EXISTS` unless `overwrite: true`.
@@ -7,14 +7,12 @@
  * The write goes to a temporary name beside the target and is renamed into place, so a failed or refused save never
  * leaves a half-written file under the name the person reads.
  *
- * OpenCode's own file permissions are asked for too: `edit` on the target, and `external_directory` when the target is
- * outside the project (design §4's row for this tool, §14.3's host suite).
+ * The method is class export: under `ask-changes` the whole save asks before it runs, and the access level is final.
  */
 import { existsSync, lstatSync, realpathSync } from "node:fs"
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
 import { BigQueryError } from "../domain/errors.js"
 import type { Options } from "../options.js"
-import type { Call } from "../tool-spec.js"
 
 export type SaveFormat = "csv" | "jsonl" | "parquet"
 
@@ -107,10 +105,4 @@ export function resolveTarget(input: { readonly path: string; readonly overwrite
     }
   }
   return { path: target, external: !inside(target, project) }
-}
-
-/** `edit` on the file, and `external_directory` on its folder when the file is outside the project. */
-export async function assertEdit(target: SaveTarget, call: Call): Promise<void> {
-  await call.assert({ action: "edit", resources: [target.path], metadata: { path: target.path } })
-  if (target.external) await call.assert({ action: "external_directory", resources: [dirname(target.path)], metadata: { path: target.path } })
 }

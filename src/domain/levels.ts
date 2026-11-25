@@ -6,7 +6,7 @@
  * which grants nothing `bigquery` does not, but which only Google's consent screen can grant. An account is `write`
  * only when BOTH its sign-in record says `write` AND the scope list of Google's answer to this process's most recent
  * token refresh holds the marker. The stored record's own scope string is never read for this. The `level` option can
- * only lower an account; headless modes (`adc`, `token`) are `read`, full stop.
+ * only lower an account; the headless `token` mode is `read`, full stop.
  */
 import * as z from "zod"
 import { BigQueryError } from "./errors.js"
@@ -22,7 +22,7 @@ export const SCOPES = {
 export const LEVELS = ["read", "write"] as const
 export type Level = (typeof LEVELS)[number]
 
-export const MODES = ["interactive", "adc", "token"] as const
+export const MODES = ["interactive", "token"] as const
 export type Mode = (typeof MODES)[number]
 
 /** The scopes a sign-in at this level requests. */
@@ -129,8 +129,8 @@ export function headlessLevelProblem(mode: Mode, level: Level | undefined): stri
 }
 
 /**
- * The disclosure, verbatim on the form under Read, in the package declaration's account description, the README's
- * Security section, docs/auth.md and status. The unbound form drops the key file, because then the credential store alone is enough.
+ * The disclosure, verbatim on the form under Read and in the README's account section. The unbound form drops the key
+ * file, because then the credential store alone is enough.
  */
 export const DISCLOSURE = {
   bound:

@@ -85,15 +85,15 @@ export function clientFromOption(value: ClientOption | undefined): OAuthClient |
 }
 
 /** The form's two visible client fields, both or neither. */
-export function clientFromForm(clientId: string, clientSecret: string): OAuthClient | undefined {
-  if (!clientId && !clientSecret) return undefined
+export function clientFromForm(clientId: string, clientCredential: string): OAuthClient | undefined {
+  if (!clientId && !clientCredential) return undefined
   if (!clientId || !CLIENT_ID.test(clientId)) {
     throw new BigQueryError("INPUT_INVALID", "The OAuth client ID is not a Google client ID", "Enter the client ID of a Desktop app OAuth client: it ends in .apps.googleusercontent.com.")
   }
-  if (!clientSecret || !SECRET.test(clientSecret)) {
+  if (!clientCredential || !SECRET.test(clientCredential)) {
     throw new BigQueryError("INPUT_INVALID", "The OAuth client needs its secret beside the client ID", "Enter both values from the same Desktop app OAuth client, or leave both blank to reuse the previous sign-in's client.")
   }
-  return { clientId, clientSecret }
+  return { clientId, clientSecret: clientCredential.trim() }
 }
 
 export interface ClientCandidates {

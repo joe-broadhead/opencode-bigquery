@@ -11,7 +11,7 @@
  * A reason or an effect label is built only from fixed words and validated identifiers: never from Google's text and
  * never from the data (§5.6).
  */
-import type { Category } from "../domain/actions.js"
+import type { Category } from "../constants.js"
 import type { StatementType } from "../domain/statements.js"
 
 /**

@@ -16,10 +16,8 @@ concurrency:
 jobs:
   ci:
     name: ci
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNNER_PUBLIC || 'ubuntu-24.04') || 'ubuntu-24.04' }}
-    # The host and pack stages install stock OpenCode 2.4.1 (TESTED_HOSTS in src/constants.ts) themselves, with scripts
-    # disabled.
-    timeout-minutes: 40
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,12 +27,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: package-lock.json
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
       # actionlint parses the workflows as workflows, not as YAML: a `${{ }}` in a context that does not exist makes
-      # GitHub reject the file and run nothing at all. Its download lives outside the checkout: the unit tests check
-      # that every file in the repository has an owner.
+      # GitHub reject the file and run nothing at all.
       - name: actionlint
         run: |
           set -euo pipefail
@@ -45,8 +39,11 @@ jobs:
           curl -sSfLO "${base}/actionlint_${version}_checksums.txt"
           grep " actionlint_${version}_linux_amd64.tar.gz$" "actionlint_${version}_checksums.txt" | sha256sum -c -
           tar xzf "actionlint_${version}_linux_amd64.tar.gz" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           cd "$GITHUB_WORKSPACE"
           "$RUNNER_TEMP/actionlint" -color
-      # OpenCode installs plugins without lifecycle scripts, and no dev dependency needs them.
+      # OpenCode installs plugins without lifecycle scripts, and no development dependency needs them.
       - run: npm ci --ignore-scripts
+      # lint, typecheck, build, unit, generated docs, the contract's conformance gate (T1 on 2.4.1 and the
+      # unsupported-host refusal included), and pack.
       - run: npm run check
