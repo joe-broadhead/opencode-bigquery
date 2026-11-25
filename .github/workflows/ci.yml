@@ -50,3 +50,18 @@ jobs:
       # lint, typecheck, bundle, unit, generated docs, the contract's conformance gate (T1 on 2.4.1 and the
       # unsupported-host refusal included), and pack.
       - run: npm run check
+      # The package must install from its commit: dist/ is committed and no lifecycle script runs. A fork head's SHA is
+      # not in this repository, so that case is skipped.
+      - name: Install the plugin from this commit
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          npm install --global @opencode/cli@2.4.1
+          H="$(mktemp -d)"
+          export HOME="$H" XDG_CONFIG_HOME="$H/c" XDG_CACHE_HOME="$H/k" XDG_DATA_HOME="$H/d" XDG_STATE_HOME="$H/s"
+          opencode plugin add "github:we-the-rebel-alliance/bigquery-plugin#${HEAD_SHA}"
+          found="$(find "$H/k" -path '*node_modules/@we-the-rebel-alliance/bigquery-plugin/dist/index.js' -type f -print -quit)"
+          test -n "$found"
+          echo "installed $found"
