@@ -134,8 +134,9 @@ export class RowPolicyProber {
   /**
    * 3. `tabledata.list` with no rows, which needs the `TRUE` filter on a row-secured table.
    *
-   * TODO(L7): the port has no filter argument. L7 confirms whether Google refuses `maxResults: 0` on a row-secured table
-   * without the filter — a refusal is what C reads as row-secured — or answers it, leaving the dry-run signal to decide.
+   * The port has no filter argument. Whether Google refuses `maxResults: 0` on a row-secured table without the filter —
+   * a refusal is what C reads as row-secured — or answers it is a known limit in docs/architecture.md; when it answers,
+   * the dry-run signal decides.
    */
   private async tabledata(facts: TableFacts, readable: readonly SchemaField[]): Promise<RowVerdict> {
     const column = readable.find((field) => field.name.length > 0)

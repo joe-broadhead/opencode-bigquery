@@ -214,7 +214,8 @@ export async function refreshAccessToken(input: {
  * `invalid_grant`, `invalid_client` or `unauthorized_client` is an ordinary refusal, not proof of a device binding
  * (Google's page: "Other failures might return invalid_grant").
  *
- * TODO(L16): record which error code Google's 400 carries for a bound token's missing proof; the live check settles it.
+ * The exact code of Google's 400 for a bound token's missing proof is recorded in docs/architecture.md's known limits;
+ * any invalid_grant here is a sign-in need.
  */
 export async function probeBinding(input: {
   readonly refreshToken: string
@@ -499,8 +500,8 @@ export function classify(failure: TokenFailure, what: "exchange" | "refresh"): B
 /**
  * `invalid_grant` with a reauthentication subtype, which is how a Workspace Cloud session limit answers (design §3.2, M8).
  *
- * TODO(L1): confirm the exact subtype and description Google uses under a Cloud session limit, and that N is the hours
- * it states; a live check under a test OU with a session limit settles both.
+ * The exact subtype, description and hours a Cloud session limit states are in docs/architecture.md's known limits;
+ * any reauthentication subtype is treated as a sign-in need.
  */
 function isReauthentication(failure: TokenFailure): boolean {
   const subtype = failure.subtype ?? ""

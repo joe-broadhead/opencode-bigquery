@@ -95,9 +95,9 @@ class BigQueryRuntime implements BigQueryPort {
       signal,
       idempotent: true,
     })
-    // TODO(L8): a dry-run answer is expected to name the location it chose, in jobReference.location. When it does not,
-    // the run is sent without one and Google infers it from the datasets: that is only safe for US/EU until L8 says
-    // whether real dry-run answers carry it (Google answers "Job not found" to a getQueryResults without a location).
+    // A dry-run answer is expected to name the location it chose, in jobReference.location. When it does not, the run is
+    // sent without one and Google infers it from the datasets; that is safe only in a single-region US or EU location
+    // until a live check confirms real dry-run answers carry it (docs/architecture.md's known limits).
     const location = job.jobReference?.location ?? request.location ?? ""
     const statistics = job.statistics?.query
     return { location, ...(statistics !== undefined ? { statistics: dryRunStatistics(statistics) } : {}) }

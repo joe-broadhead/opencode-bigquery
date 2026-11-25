@@ -25,5 +25,6 @@ contract's gate, including T1 on OpenCode 2.4.1 and the unsupported-host refusal
 
 ## Commits and releases
 
-Conventional commits. The lead cuts `v0.0.x` releases on `master` with `npx plugin-kit release <version>`; CI publishes
-the GitHub Release with `dist/`, `SHA256SUMS` and the conformance report. Never edit `dist/` by hand.
+Conventional commits, one change per pull request. The owner cuts `v0.0.x` releases on `master` with
+`npx plugin-kit release <version>`; the release workflow checks the tag against `package.json`, runs the gate, and
+publishes the GitHub Release with the packed tarball, the conformance report and `SHA256SUMS`. Never edit `dist/` by hand.

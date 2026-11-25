@@ -5,6 +5,9 @@ column; estimate a query before it runs; run reads under a byte cap; profile a t
 and plan then commit changes. Every alias signs in on its own, so a work and a personal Google account can be used side
 by side.
 
+The plugin is built on [plugin-contract](https://github.com/we-the-rebel-alliance/plugin-contract) v0: one manifest,
+accounts and access through the contract's modules, and one `register` call for every method.
+
 Queries bill the person's Google Cloud project. Every job carries a byte cap, and a read the cap cannot bound needs a
 plan the person previews.
 
@@ -52,6 +55,30 @@ The sign-in's level is Read or Read and write. Read runs every read and refuses 
 only the person can sign in again choosing Read and write. For Google itself to refuse changes, ask an administrator to
 grant BigQuery Job User and Data Viewer, and nothing that can write.
 
+## Options
+
+The common options; [Configuration](docs/configuration.md) has every option and its default.
+
+```json
+{
+  "options": {
+    "access": "ask-changes",
+    "accounts": { "work": { "billingProject": "work-project-1234", "location": "EU" } },
+    "maxBytesBilled": "10GiB",
+    "maxBytesCeiling": "100GiB",
+    "budget": { "daily": "200GiB", "action": "refuse" },
+    "savedQueries": { "revenue_today": { "sql": "SELECT order_date, SUM(total) AS revenue FROM `work-project-1234.analytics.orders` GROUP BY order_date", "maxBytes": "1GiB" } }
+  }
+}
+```
+
+- `access`: `all`, `ask-changes` or `read-only`.
+- `accounts`: one profile per alias, with its `billingProject`, `location`, `level`, `datasets` fence and `scopes`.
+- `maxBytesBilled` / `maxBytesCeiling`: the default byte cap on a job and the most a call may raise it to.
+- `budget`: a daily or per-session spend limit, counted from what Google actually billed (`refuse` or `warn`).
+- `savedQueries`: the saved queries the `bigquery.saved` source may run.
+- `allowUntestedHost`: start on an OpenCode release outside the tested range; a supported host never needs it.
+
 ## Access
 
 The plugin's `access` option is the person's ceiling: `all` (the default) runs every method, `ask-changes` asks before
@@ -60,6 +87,19 @@ rules go into every agent; an agent that lacks them is named in `status`.
 
 Writes are plan, then commit: a planner dry-runs the statement and answers a preview and a `planId`; the commit method
 takes only `{ planId }`, re-checks the statement and runs it once, as the account that planned it.
+
+## Troubleshooting
+
+- **The tools are missing.** The plugin refused the host (`HOST_UNTESTED`) or failed to load: run `npx plugin-kit check`
+  in a checkout and read `status`; on a supported OpenCode `>=2.4.1 <2.5.0` it starts.
+- **`NEEDS_SIGN_IN`.** Run `/connect` and choose the account the next step names; a `token` account needs its environment
+  variable set.
+- **`ACCOUNT_REQUIRED` / `ACCOUNT_UNKNOWN`.** Pass `account` with one of the aliases the next step lists.
+- **`BUDGET_EXCEEDED`.** Narrow the query, or raise `maxBytes` up to `maxBytesCeiling`, or the budget.
+- **A read is refused and names `plan_query`.** The byte cap cannot bound it: plan it with `plan_query`, show the
+  preview, then commit with `run_query`.
+- **`PLAN_INVALID` / `PLAN_USED`.** A plan commits once and expires after 15 minutes: plan again.
+- **`PERMISSION_DENIED`.** The account, the dataset fence or the person's rules refuse it. Do not widen it yourself.
 
 ## Documentation
 
@@ -70,6 +110,7 @@ takes only `{ planId }`, re-checks the statement and runs it once, as the accoun
 - [Architecture](docs/architecture.md): layers, the provider client and what is cached.
 - [Security](docs/security.md): what leaves the machine, the scopes, redaction and the plan flow.
 - [AGENTS.md](AGENTS.md): the guide for an agent working in this repository.
+- [plugin-contract](https://github.com/we-the-rebel-alliance/plugin-contract): the contract and the plugin standard.
 
 ## Capabilities
 
@@ -155,4 +196,4 @@ a reason is redacted and cut to one line.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE) and [NOTICE](NOTICE) for the code bundled into `dist/`.
+MIT. See [LICENSE](LICENSE); [NOTICE](NOTICE) lists the code bundled into `dist/`.

@@ -1,13 +1,16 @@
-name: release
+name: Release
 
-# Publishes v<version> from the tag `plugin-kit release` cut on a master commit whose CI passed.
-# The kit cuts the tag; this workflow builds, checks again, and attaches dist/, SHA256SUMS and the conformance report.
+# A tag v<package.json version> on a master commit whose CI passed creates the GitHub Release. Releases are not
+# published to npm: a consumer pins the tag, github:we-the-rebel-alliance/bigquery-plugin#v<version>, and dist/ is built
+# by this workflow. Only the owner decides a release; an agent never pushes a tag on its own.
+
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -17,7 +20,9 @@ jobs:
   release:
     name: release
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,8 +30,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: package-lock.json
+          package-manager-cache: false
       # actionlint parses the workflows as workflows, not as YAML: `npm run check` includes that stage.
       - name: actionlint
         run: |
@@ -41,22 +45,30 @@ jobs:
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
           cd "$GITHUB_WORKSPACE"
           "$RUNNER_TEMP/actionlint" -color
+      - name: Fetch the contract over HTTPS
+        # The contract is a public repository, and npm records its GitHub dependency over ssh. A runner has no key.
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
       - run: npm ci --ignore-scripts
       - run: npm run check
-      - name: Keep the conformance report
-        run: npx plugin-kit conformance --json > conformance-report.json
-      - name: Pack, and write SHA256SUMS
+      - name: The tag names this package's version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          test "v${version}" = "$TAG"
+      - name: Pack the release files
         run: |
           set -euo pipefail
           mkdir -p release
-          npm pack --ignore-scripts --pack-destination release
-          cp dist/index.js release/index.js
-          cp conformance-report.json release/conformance-report.json
-          cd release
-          for file in *; do [ "$file" != "SHA256SUMS" ] && printf '%s\n' "$file"; done | sort > ../sums-list.txt
-          while IFS= read -r file; do sha256sum "$file"; done < ../sums-list.txt > SHA256SUMS
-          cd ..
-      - name: Publish the GitHub Release
+          npx plugin-kit check --json > release/conformance.json
+          npm pack --pack-destination release
+          sha256sum release/*.tgz release/conformance.json > release/SHA256SUMS
+      - name: Create the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release/* --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md."
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" release/*.tgz release/conformance.json release/SHA256SUMS --repo "$REPO" --verify-tag --title "$TAG" --generate-notes

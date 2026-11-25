@@ -35,6 +35,7 @@ Google OAuth (`accounts.via: "integration"`). There is no MCP server and no `bq`
 ## Layout
 
 ```
+.github/             CODEOWNERS, the issue and pull-request templates, ci.yml and release.yml
 src/
   index.ts            Plugin.define({ id, setup }): assertHost, options, accounts, provider, one register
   manifest.ts         the package.json capabilities, read once

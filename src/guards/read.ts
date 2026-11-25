@@ -501,8 +501,8 @@ export function saveNext(job: { readonly project: string; readonly jobId: string
 /**
  * Why the run differs from its dry run, or undefined.
  *
- * TODO(L7, L13): whether a query's `referencedTables` already lists a view's base tables and a routine body's tables is
- * the live check's question; expansion does not depend on it, because it dry-runs each body itself.
+ * Whether a query's `referencedTables` already lists a view's base tables and a routine body's tables is a known limit in
+ * docs/architecture.md; expansion does not depend on it, because it dry-runs each body itself.
  */
 function driftOf(prepared: PreparedRead, status: JobStatus): string | undefined {
   if (status.statementType !== undefined && status.statementType !== prepared.statementType) {

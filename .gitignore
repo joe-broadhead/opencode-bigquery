@@ -6,3 +6,4 @@ bigquery-plugin-*.tgz
 reports/
 coverage/
 .bigquery/
+release/

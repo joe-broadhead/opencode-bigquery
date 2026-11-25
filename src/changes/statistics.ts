@@ -22,8 +22,8 @@ export interface Target extends PlanTarget {
    * `ddl`/`dcl`: the dry run's own target field, exact. `statement`: the destination the statement's own leading
    * keywords name (`INSERT INTO`, `UPDATE`, `MERGE INTO`, `TRUNCATE TABLE`, `ALTER TABLE`, …), read by the lexer as a
    * stricter-only addition (review bigquery-8 H-1) and never used to allow anything. `referenced`: a DML's
-   * `referencedTables`, which Google does not say is the table written (TODO(L7, L13)), so a fence refuses a DML whose
-   * only targets are referenced.
+   * `referencedTables`, which Google does not say is the table written (docs/architecture.md's known limits), so a fence
+   * refuses a DML whose only targets are referenced.
    */
   readonly source: "ddl" | "dcl" | "statement" | "referenced"
 }
@@ -185,8 +185,8 @@ export function targetsOf(
   if (statistics.dclTargetView !== undefined) table("view", statistics.dclTargetView, "dcl")
   if (statistics.dclTargetDataset !== undefined) dataset(statistics.dclTargetDataset, "dcl")
 
-  // TODO(L7, L13): whether a DML statement's `referencedTables` includes the table it writes is unconfirmed; the live
-  // check records it. Until then the preview says so, and this is the only answer Google's dry run gives for a DML.
+  // Whether a DML statement's `referencedTables` includes the table it writes is a known limit in
+  // docs/architecture.md. Until a live check records it, the preview says so, and this is the only answer the dry run gives.
   if (found.size === 0 && DML_TARGETS.has(statementType)) {
     for (const ref of referencedTables) table("table", ref, "referenced")
   }
