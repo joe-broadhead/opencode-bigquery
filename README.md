@@ -41,7 +41,7 @@ The plugin needs OpenCode `>=2.4.1 <2.5.0` and has no runtime dependencies: `dis
 
 ### Several accounts
 
-Each alias in `options.accounts` is its own integration, `<name>` for `default` and `bigquery-<alias>` for any other:
+Each alias in `options.accounts` is its own integration, `bigquery` for `default` and `bigquery-<alias>` for any other:
 
 ```json
 { "accounts": { "work": { "billingProject": "work-project" }, "personal": { "billingProject": "home-project" } } }
