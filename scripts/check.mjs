@@ -10,7 +10,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const STAGES = [
   { name: "lint", command: "npx", args: ["biome", "check", "."] },
   // The workflows as workflows: actionlint catches a `${{ }}` in a context GitHub rejects before any step runs.
-  { name: "workflows", command: "actionlint", args: [] },
+  { name: "workflows", command: "node", args: ["scripts/actionlint.mjs"] },
   { name: "typecheck", command: "npx", args: ["tsc", "--noEmit"] },
   { name: "bundle", command: "npm", args: ["run", "bundle"] },
   { name: "unit", command: "npx", args: ["vitest", "run"] },

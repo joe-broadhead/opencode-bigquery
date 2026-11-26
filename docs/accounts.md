@@ -1,6 +1,6 @@
 # Accounts
 
-The plugin holds the credentials, so its mechanism is `integration`: one OpenCode integration per alias, `<name>` for
+The plugin holds the credentials, so its mechanism is `integration`: one OpenCode integration per alias, `bigquery` for
 `default` and `bigquery-<alias>` for any other. `plugin-kit docs` writes the mechanism and the profile fields from
 `capabilities`; edit the manifest, never the generated text.
 
