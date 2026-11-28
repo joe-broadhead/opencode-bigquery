@@ -11,6 +11,13 @@ accounts and access through the contract's modules, and one `register` call for 
 Queries bill the person's Google Cloud project. Every job carries a byte cap, and a read the cap cannot bound needs a
 plan the person previews.
 
+Google publishes a managed BigQuery MCP server ([MCP reference](https://cloud.google.com/bigquery/docs/reference/mcp),
+checked 28 November 2026), but this plugin does not build on it. Its `execute_sql` and `execute_sql_readonly` tools
+accept no `maximumBytesBilled`, so a job run through the server would lose the byte cap every job here carries; the
+server advertises one OAuth scope, `https://www.googleapis.com/auth/bigquery`, which permits writes, so a Read sign-in
+could not be enforced by Google; and it has no jobs feed, saved-query snapshot, local export or plan-then-commit flow.
+There is therefore no server to build on for this plugin's job, and the plugin keeps its REST client and its own sign-in.
+
 ## Install
 
 The current release is `v0.0.0`; install it with
